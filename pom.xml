@@ -18,11 +18,12 @@
 		<!-- sonar w/o tests -->
 		<sonar.tests/>
 		<!-- ⬇️⬇️⬇️Dependencies version properties⬇️⬇️⬇️ -->
-		<quarkus.platform.version>2.3.1.Final</quarkus.platform.version>
+		<quarkus.platform.version>2.4.2.Final</quarkus.platform.version>
 		<quarkus-operator-sdk.version>2.0.0.CR2</quarkus-operator-sdk.version>
 		<istio-client.version>1.7.7.1</istio-client.version>
 		<operator-framework-core.version>1.9.9</operator-framework-core.version>
 		<kubernetes-client.version>5.9.0</kubernetes-client.version>
+		<mapstruct.version>1.5.0.Beta1</mapstruct.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -47,6 +48,11 @@
 			</dependency>
 			<dependency>
 				<groupId>me.snowdrop</groupId>
+				<artifactId>istio-client</artifactId>
+				<version>${istio-client.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.snowdrop</groupId>
 				<artifactId>istio-model</artifactId>
 				<version>${istio-client.version}</version>
 			</dependency>
@@ -59,56 +65,48 @@
 	</dependencyManagement>
 	<dependencies>
 		<dependency>
-			<groupId>io.javaoperatorsdk</groupId>
-			<artifactId>operator-framework-core</artifactId>
+			<groupId>jakarta.enterprise</groupId>
+			<artifactId>jakarta.enterprise.cdi-api</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>io.fabric8</groupId>
-			<artifactId>certmanager-model-v1</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>io.fabric8</groupId>
-			<artifactId>kubernetes-model-common</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>io.fabric8</groupId>
-			<artifactId>kubernetes-client</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>jakarta.inject</groupId>
-			<artifactId>jakarta.inject-api</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>io.fabric8</groupId>
-			<artifactId>kubernetes-model-apps</artifactId>
+			<groupId>io.smallrye.reactive</groupId>
+			<artifactId>mutiny</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>me.snowdrop</groupId>
 			<artifactId>istio-model</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>io.fabric8</groupId>
-			<artifactId>kubernetes-model-core</artifactId>
+			<groupId>org.mapstruct</groupId>
+			<artifactId>mapstruct</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>jakarta.inject</groupId>
+			<artifactId>jakarta.inject-api</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>one.util</groupId>
 			<artifactId>streamex</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>io.fabric8</groupId>
-			<artifactId>certmanager-client</artifactId>
-		</dependency>
-		<dependency>
 			<groupId>io.quarkus</groupId>
 			<artifactId>quarkus-core</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>io.quarkus</groupId>
-			<artifactId>quarkus-kubernetes-client</artifactId>
-		</dependency>
-		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.fabric8</groupId>
+			<artifactId>kubernetes-client</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.fabric8</groupId>
+			<artifactId>kubernetes-model-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.fabric8</groupId>
+			<artifactId>kubernetes-model-networking</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.jboss.logging</groupId>
@@ -120,6 +118,54 @@
 			<artifactId>slf4j-jboss-logmanager</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!-- Tests -->
+		<dependency>
+			<groupId>io.fabric8</groupId>
+			<artifactId>kubernetes-server-mock</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.quarkus</groupId>
+			<artifactId>quarkus-junit5</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.quarkus</groupId>
+			<artifactId>quarkus-test-kubernetes-client</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.awaitility</groupId>
+			<artifactId>awaitility</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.google.truth</groupId>
+			<artifactId>truth</artifactId>
+			<version>1.1.3</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.google.truth.extensions</groupId>
+			<artifactId>truth-java8-extension</artifactId>
+			<version>1.1.3</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.hamcrest</groupId>
+			<artifactId>hamcrest</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- quarkus build -->
 		<dependency>
 			<groupId>io.quarkiverse.operatorsdk</groupId>
@@ -128,6 +174,10 @@
 		<dependency>
 			<groupId>io.quarkus</groupId>
 			<artifactId>quarkus-container-image-jib</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.quarkus</groupId>
+			<artifactId>quarkus-kubernetes-client</artifactId>
 		</dependency>
 	</dependencies>
 	<build>

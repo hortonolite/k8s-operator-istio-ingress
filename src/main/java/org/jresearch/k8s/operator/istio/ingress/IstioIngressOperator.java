@@ -1,7 +1,6 @@
 package org.jresearch.k8s.operator.istio.ingress;
 
 import java.time.Duration;
-import java.util.concurrent.ExecutionException;
 
 import javax.inject.Inject;
 
@@ -20,6 +19,8 @@ public class IstioIngressOperator implements QuarkusApplication {
 
 	@Inject
 	KubernetesClient kubernetesClient;
+	@Inject
+	IngressController ingressController;
 
 	public static void main(String... args) {
 		Quarkus.run(IstioIngressOperator.class, args);
@@ -31,18 +32,15 @@ public class IstioIngressOperator implements QuarkusApplication {
 
 		try (SharedIndexInformer<Ingress> informer = informerFactory.sharedIndexInformerFor(Ingress.class, Duration.ofMinutes(1).toMillis())) {
 
-			new IngressController(kubernetesClient, informer);
+			informer.addEventHandler(ingressController);
 
-			informerFactory.startAllRegisteredInformers().get();
+			informerFactory.startAllRegisteredInformers();
 			informerFactory.addSharedInformerEventListener(ex -> Log.errorf(ex, "Some error while listening ingress updates: %s", ex.getMessage()));
 
 			Quarkus.waitForExit();
-		} catch (KubernetesClientException | ExecutionException ex) {
+		} catch (KubernetesClientException ex) {
 			Log.errorf(ex, "Kubernetes client exception : %s", ex.getMessage());
 			return 1;
-		} catch (InterruptedException ex) {
-			Log.infof("Execution was interrupted: %s", ex.getMessage());
-			Thread.currentThread().interrupt();
 		}
 		return 0;
 	}
