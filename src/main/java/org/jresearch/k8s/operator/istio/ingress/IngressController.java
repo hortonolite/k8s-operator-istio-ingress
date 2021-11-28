@@ -1,22 +1,29 @@
 package org.jresearch.k8s.operator.istio.ingress;
 
 import static io.fabric8.kubernetes.client.utils.KubernetesResourceUtil.*;
+import static org.jresearch.k8s.operator.istio.ingress.model.PathType.*;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
 
 import org.jresearch.k8s.operator.istio.ingress.model.IngressAnnotation;
 import org.jresearch.k8s.operator.istio.ingress.model.IstioMapper;
+import org.jresearch.k8s.operator.istio.ingress.model.OperatorMapper;
+import org.jresearch.k8s.operator.istio.ingress.model.Path;
+import org.jresearch.k8s.operator.istio.ingress.model.Port;
 import org.jresearch.k8s.operator.istio.ingress.model.RoutingInfo;
 import org.jresearch.k8s.operator.istio.ingress.model.Rule;
 import org.jresearch.k8s.operator.istio.ingress.model.Tls;
 
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
+import io.fabric8.kubernetes.api.model.Service;
+import io.fabric8.kubernetes.api.model.ServicePort;
 import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressRule;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressSpec;
@@ -28,14 +35,32 @@ import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
+import me.snowdrop.istio.api.networking.v1beta1.Destination;
+import me.snowdrop.istio.api.networking.v1beta1.DestinationBuilder;
+import me.snowdrop.istio.api.networking.v1beta1.ExactMatchType;
+import me.snowdrop.istio.api.networking.v1beta1.ExactMatchTypeBuilder;
 import me.snowdrop.istio.api.networking.v1beta1.Gateway;
 import me.snowdrop.istio.api.networking.v1beta1.GatewayBuilder;
 import me.snowdrop.istio.api.networking.v1beta1.GatewayList;
 import me.snowdrop.istio.api.networking.v1beta1.GatewaySpec;
 import me.snowdrop.istio.api.networking.v1beta1.GatewaySpecBuilder;
+import me.snowdrop.istio.api.networking.v1beta1.HTTPMatchRequest;
+import me.snowdrop.istio.api.networking.v1beta1.HTTPMatchRequestBuilder;
+import me.snowdrop.istio.api.networking.v1beta1.HTTPRoute;
+import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteBuilder;
+import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteDestination;
+import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteDestinationBuilder;
+import me.snowdrop.istio.api.networking.v1beta1.PrefixMatchType;
+import me.snowdrop.istio.api.networking.v1beta1.PrefixMatchTypeBuilder;
+import me.snowdrop.istio.api.networking.v1beta1.StringMatch;
+import me.snowdrop.istio.api.networking.v1beta1.StringMatch.MatchType;
+import me.snowdrop.istio.api.networking.v1beta1.StringMatchBuilder;
 import me.snowdrop.istio.api.networking.v1beta1.VirtualService;
 import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceBuilder;
 import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceList;
+import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceSpec;
+import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceSpecBuilder;
+import one.util.streamex.EntryStream;
 import one.util.streamex.StreamEx;
 
 @ApplicationScoped
@@ -47,6 +72,8 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 	KubernetesClient kubernetesClient;
 	@Inject
 	IstioMapper istioMapper;
+	@Inject
+	OperatorMapper operatorMapper;
 
 	@Override
 	public void onAdd(Ingress obj) {
@@ -78,14 +105,14 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.item(obj)
 			.emitOn(Infrastructure.getDefaultExecutor())
 			.subscribe()
-			.with(this::onAddOrUpdate);
+			.with(this::onDelete);
 		Log.tracef("delete %s", getQualifiedName(obj));
 	}
 
 	private void onAddOrUpdate(Ingress ingress) {
 		Log.tracef("on add/update %s", getQualifiedName(ingress));
-		List<RoutingInfo> istioPratameters = getIstioRoutingInfo(ingress);
-		istioPratameters.forEach(this::createOrUpdateIstioResources);
+		Optional<RoutingInfo> istioPratameters = getIstioRoutingInfo(ingress);
+		istioPratameters.ifPresent(this::createOrUpdateIstioResources);
 	}
 
 	private void createOrUpdateIstioResources(RoutingInfo info) {
@@ -93,26 +120,145 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		NonNamespaceOperation<Gateway, GatewayList, Resource<Gateway>> gatewayClient = kubernetesClient.resources(Gateway.class, GatewayList.class).inNamespace(info.getNamespace());
 		Gateway gateway = new GatewayBuilder()
 			.withMetadata(createMetadata(info.getName(), info.getNamespace()))
-			.withSpec(createSpec(info.getIstioSelector(), info.getTls(), info.getRule()))
+			.withSpec(createGatewaySpec(info))
 			.build();
 		gatewayClient.createOrReplace(gateway);
-		Log.infof("Create/update istio virtual service for: %s", info);
+		createOrUpdateVirtualServices(gateway.getMetadata().getName(), info);
+	}
+
+	@SuppressWarnings("resource")
+	private void createOrUpdateVirtualServices(String gatewayName, RoutingInfo info) {
 		NonNamespaceOperation<VirtualService, VirtualServiceList, Resource<VirtualService>> virtualServiceClient = kubernetesClient.resources(VirtualService.class, VirtualServiceList.class).inNamespace(info.getNamespace());
+		EntryStream.of(info.getRules()).forKeyValue((i, rule) -> createOrUpdateVirtualService(virtualServiceClient, i, rule, gatewayName, info));
+	}
+
+	@SuppressWarnings("boxing")
+	private void createOrUpdateVirtualService(NonNamespaceOperation<VirtualService, VirtualServiceList, Resource<VirtualService>> virtualServiceClient, Integer index, Rule rule, String gatewayName, RoutingInfo info) {
+		Log.infof("Create/update istio virtual service %s for: %s", index, info);
+		String virtualServiceName = genarateVirtualServiceName(info.getName(), index);
 		VirtualService virtualService = new VirtualServiceBuilder()
-			.withMetadata(createMetadata(info.getName(), info.getNamespace()))
+			.withMetadata(createMetadata(virtualServiceName, info.getNamespace()))
+			.withSpec(createVirtualServiceSpec(gatewayName, info.getNamespace(), rule))
 			.build();
 		virtualServiceClient.createOrReplace(virtualService);
 	}
 
-	private GatewaySpec createSpec(Map<String, String> istioSelector, List<Tls> tls, Rule rule) {
-		return rule.getHosts().isEmpty() ? createSpecHttpsOnly(istioSelector, tls) : createSpecWithHttp(istioSelector, tls, rule);
+	public static String genarateVirtualServiceName(String baseName, int index) {
+		return baseName + "-" + index;
 	}
 
-	private GatewaySpec createSpecWithHttp(Map<String, String> istioSelector, List<Tls> tls, Rule rule) {
+	private VirtualServiceSpec createVirtualServiceSpec(String gatewayName, String namespace, Rule rule) {
+		return new VirtualServiceSpecBuilder()
+			.withGateways(gatewayName)
+			.withHosts(rule.getHost())
+			.withHttp(createRoutes(namespace, rule.getPaths()))
+			.build();
+	}
+
+	@SuppressWarnings("resource")
+	private List<HTTPRoute> createRoutes(String namespace, List<Path> paths) {
+		return StreamEx.of(paths)
+			.map(p -> createRoute(namespace, p))
+			.nonNull()
+			.toImmutableList();
+	}
+
+	private HTTPRoute createRoute(String namespace, Path path) {
+		OptionalInt port = getPortNumber(namespace, path);
+		return new HTTPRouteBuilder()
+			.withRoute(createRoute(port, path.getService().getName()))
+			.withMatch(createMatch(path))
+			.build();
+	}
+
+	private static HTTPMatchRequest createMatch(Path path) {
+		return new HTTPMatchRequestBuilder()
+			.withUri(createUri(path))
+			.build();
+	}
+
+	private static StringMatch createUri(Path path) {
+		return new StringMatchBuilder()
+			.withMatchType(createMatchType(path))
+			.build();
+	}
+
+	private static MatchType createMatchType(Path path) {
+		if (Exact == path.getPathType()) {
+			return createExactMatchType(path.getPath());
+		}
+		return createPrefixMatchType(path.getPath());
+	}
+
+	private static PrefixMatchType createPrefixMatchType(String path) {
+		return new PrefixMatchTypeBuilder()
+			.withPrefix(path)
+			.build();
+	}
+
+	private static ExactMatchType createExactMatchType(String path) {
+		return new ExactMatchTypeBuilder()
+			.withExact(path)
+			.build();
+	}
+
+	private static HTTPRouteDestination createRoute(OptionalInt port, String serviceName) {
+		return new HTTPRouteDestinationBuilder()
+			.withDestination(port.isEmpty() ? createDestination(serviceName) : createDestination(port.getAsInt(), serviceName))
+			.build();
+	}
+
+	private static Destination createDestination(String serviceName) {
+		return new DestinationBuilder()
+			.withHost(serviceName)
+			.build();
+	}
+
+	@SuppressWarnings("boxing")
+	private static Destination createDestination(int port, String serviceName) {
+		return new DestinationBuilder()
+			.withHost(serviceName)
+			.withNewPort(port)
+			.build();
+	}
+
+	@SuppressWarnings("boxing")
+	private OptionalInt getPortNumber(String namespace, Path path) {
+		Port port = path.getService().getPort();
+		if (port.getNumber() != null) {
+			return OptionalInt.of(port.getNumber());
+		}
+		String serviceName = path.getService().getName();
+		Service service = kubernetesClient.services().inNamespace(namespace).withName(serviceName).get();
+		if (service == null) {
+			return OptionalInt.empty();
+		}
+		String portName = port.getName();
+		return service.getSpec()
+			.getPorts()
+			.stream()
+			.filter(p -> byName(p, portName))
+			.findAny()
+			.map(ServicePort::getPort)
+			.map(OptionalInt::of)
+			.orElseGet(OptionalInt::empty);
+	}
+
+	private static boolean byName(ServicePort port, String portName) {
+		return portName.equalsIgnoreCase(port.getName());
+	}
+
+	private GatewaySpec createGatewaySpec(RoutingInfo info) {
+		var istioSelector = info.getIstioSelector();
+		var tls = info.getTls();
+		return info.isHttpsOnly() ? createSpecHttpsOnly(istioSelector, tls) : createSpecWithHttp(istioSelector, tls, info);
+	}
+
+	private GatewaySpec createSpecWithHttp(Map<String, String> istioSelector, List<Tls> tls, RoutingInfo info) {
 		return new GatewaySpecBuilder()
 			.withSelector(istioSelector)
 			.withServers(istioMapper.mapHttps(tls))
-			.addToServers(-1, istioMapper.mapHttp(rule))
+			.addToServers(-1, istioMapper.mapHttp(info))
 			.build();
 	}
 
@@ -136,11 +282,11 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 	}
 
 	@SuppressWarnings("resource")
-	private List<RoutingInfo> getIstioRoutingInfo(Ingress ingress) {
+	private Optional<RoutingInfo> getIstioRoutingInfo(Ingress ingress) {
 		String ingressClassName = Optional.of(ingress).map(Ingress::getSpec).map(IngressSpec::getIngressClassName).orElse(null);
 		if (!INGRESS_CLASSNAME.equals(ingressClassName)) {
 			Log.infof("Skip ingress %s. Ingress class %s is not a %s", getQualifiedName(ingress), ingressClassName, INGRESS_CLASSNAME);
-			return List.of();
+			return Optional.empty();
 		}
 		// ignore defaultBackend (?)
 
@@ -151,17 +297,26 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		// process rules
 		// Check kubernetes.io/ingress.allow-http annotation
 
-		String allowHttpValue = IngressAnnotation.ALLOW_HTTP.getValue(ingress);
-		List<IngressRule> ingressRules = Optional.of(ingress).filter(i -> Boolean.parseBoolean(allowHttpValue)).map(Ingress::getSpec).map(IngressSpec::getRules).orElseGet(List::of);
-		List<String> httpHosts = StreamEx.of(ingressRules).map(IngressRule::getHost).toImmutableList();
+		boolean allowHttpValue = Boolean.parseBoolean(IngressAnnotation.ALLOW_HTTP.getValue(ingress));
+		List<IngressRule> ingressRules = Optional.of(ingress).map(Ingress::getSpec).map(IngressSpec::getRules).orElseGet(List::of);
+		List<Rule> rules = StreamEx.of(ingressRules)
+			.map(operatorMapper::map)
+			.toImmutableList();
 
 		String istioSelectorAnnotation = IngressAnnotation.ISTIO_SELECTOR.getValue(ingress);
-
 		var istioSelector = StreamEx.split(istioSelectorAnnotation, ',', true)
 			.map(s -> s.split("=", 2))
 			.toMap(s -> s[0], s -> s[1]);
 
-		return List.of(new RoutingInfo(ingress.getMetadata().getName(), ingress.getMetadata().getNamespace(), istioSelector, tls, Rule.of(httpHosts)));
+		return Optional.of(RoutingInfo.builder()
+			.name(ingress.getMetadata().getName())
+			.namespace(ingress.getMetadata().getNamespace())
+			.istioSelector(istioSelector)
+			.tls(tls)
+			.httpsOnly(!allowHttpValue)
+			.rules(rules)
+			.build());
+
 	}
 
 }

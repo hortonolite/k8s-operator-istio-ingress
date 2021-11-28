@@ -35,11 +35,13 @@ public interface IstioMapper {
 	Server mapHttps(Tls tls);
 
 	@Mapping(target = "port", constant = HTTP_PROTOCOL)
+	@Mapping(target = "hosts", source = "httpHosts")
 	@Mapping(target = "tls", ignore = true)
 	@Mapping(target = "bind", ignore = true)
 	@Mapping(target = "defaultEndpoint", ignore = true)
 	@Mapping(target = "name", ignore = true)
-	Server mapHttp(Rule rule);
+	@BeanMapping(ignoreUnmappedSourceProperties = { "istioSelector", "name", "namespace", "rules", "tls" })
+	Server mapHttp(RoutingInfo info);
 
 	default ServerTLSSettings mapSecretName(String secretName) {
 		return new ServerTLSSettingsBuilder()
