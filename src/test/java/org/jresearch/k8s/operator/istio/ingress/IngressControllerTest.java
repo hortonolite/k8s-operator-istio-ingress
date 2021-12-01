@@ -4,7 +4,9 @@ import static org.awaitility.Awaitility.*;
 import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.MatcherAssert.*;
 import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.*;
@@ -22,6 +24,7 @@ import javax.inject.Inject;
 
 import org.hamcrest.Matcher;
 import org.jresearch.k8s.operator.istio.ingress.model.IngressAnnotation;
+import org.jresearch.k8s.operator.istio.ingress.model.PathType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,18 +71,24 @@ import io.quarkus.test.kubernetes.client.WithKubernetesTestServer;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import me.snowdrop.istio.api.networking.v1beta1.Destination;
+import me.snowdrop.istio.api.networking.v1beta1.ExactMatchType;
 import me.snowdrop.istio.api.networking.v1beta1.Gateway;
 import me.snowdrop.istio.api.networking.v1beta1.GatewayList;
 import me.snowdrop.istio.api.networking.v1beta1.GatewaySpec;
+import me.snowdrop.istio.api.networking.v1beta1.HTTPMatchRequest;
 import me.snowdrop.istio.api.networking.v1beta1.HTTPRoute;
 import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteDestination;
 import me.snowdrop.istio.api.networking.v1beta1.Port;
+import me.snowdrop.istio.api.networking.v1beta1.PrefixMatchType;
 import me.snowdrop.istio.api.networking.v1beta1.Server;
 import me.snowdrop.istio.api.networking.v1beta1.ServerTLSSettingsMode;
+import me.snowdrop.istio.api.networking.v1beta1.StringMatch;
+import me.snowdrop.istio.api.networking.v1beta1.StringMatch.MatchType;
 import me.snowdrop.istio.api.networking.v1beta1.VirtualService;
 import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceList;
 import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceSpec;
 import one.util.streamex.EntryStream;
+import one.util.streamex.StreamEx;
 
 @QuarkusTest
 @WithKubernetesTestServer(port = 7890)
@@ -128,6 +137,8 @@ class IngressControllerTest {
 		try (NamespacedKubernetesClient client = mockServer.getClient()) {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
+					assertEquals(Boolean.TRUE, client.resources(VirtualService.class, VirtualServiceList.class).inNamespace(TEST_NAMESPACE).delete());
+					assertEquals(Boolean.TRUE, client.resources(Gateway.class, GatewayList.class).inNamespace(TEST_NAMESPACE).delete());
 					assertEquals(Boolean.TRUE, v1.ingresses().inNamespace(TEST_NAMESPACE).delete());
 					assertEquals(Boolean.TRUE, client.services().inNamespace(TEST_NAMESPACE).delete());
 				}
@@ -190,10 +201,15 @@ class IngressControllerTest {
 		SET02("Should have correct owner record pointed to test ingress", getIngressWithRulesNoHttpDefault(), OWNER),
 		SET03("Should have the same NS as ingres", getIngressWithRulesNoHttpDefault(), NAMESPACE),
 		SET04("should have correct gateway name", getIngressWithRulesNoHttpDefault(), GW_NAME),
+		SET05("should have prefix path for ImplementationSpecific ingres", getIngressWithImplementationSpecificPath(), IngressControllerTest::checkPrefixPath),
+		SET06("should have prefix path for Prefix ingres", getIngressWithPrefixPath(), IngressControllerTest::checkPrefixPath),
+		SET07("should have exact path for Exact ingres", getIngressWithExactPath(), IngressControllerTest::checkExactPath),
+		SET08("should generate 2 VS for ingres with 2 rules", getIngressWithTwoRules(), vs -> checkHost(vs, "http01.example.com"), vs -> checkHost(vs, "http02.example.com")),
 		;
 
-		private VirtualServiceParams(String testDescription, Ingress testIngress, Predicate<? super VirtualService> testVirtualService) {
-			this(testDescription, testIngress, wrap(testVirtualService));
+		@SuppressWarnings("resource")
+		private VirtualServiceParams(String testDescription, Ingress testIngress, Predicate<? super VirtualService>... testVirtualServices) {
+			this(testDescription, testIngress, StreamEx.of(testVirtualServices).<BiPredicate<? super Ingress, ? super VirtualService>>map(IngressControllerTest::wrap).toList());
 		}
 
 		private VirtualServiceParams(String testDescription, Ingress testIngress, BiPredicate<? super Ingress, ? super VirtualService>... testVirtualServices) {
@@ -213,7 +229,7 @@ class IngressControllerTest {
 	@SuppressWarnings({ "resource", "boxing" })
 	@ParameterizedTest(name = "{0}")
 	@EnumSource
-	@DisplayName("Should create Istio GW and VS for provided ingress")
+	@DisplayName("Should create correct Istio VS for provided ingress")
 	void testVirtualServiceCreate(VirtualServiceParams testData) {
 
 		var testIngressIstio = testData.getTestIngress();
@@ -311,9 +327,9 @@ class IngressControllerTest {
 
 					// Chek ignore general
 					Resource<Gateway> testGatewayGeneral = client.resources(Gateway.class, GatewayList.class).inNamespace(TEST_NAMESPACE).withName(TEST_NAME);
-					await().during(Duration.ofSeconds(1)).failFast(() -> EXIST.test(testGatewayGeneral)).until(() -> Boolean.TRUE);
+					await().during(Duration.ofSeconds(1)).failFast(() -> testGatewayGeneral.get() != null).until(() -> Boolean.TRUE);
 					Resource<VirtualService> testVirtualServiceGeneral = client.resources(VirtualService.class, VirtualServiceList.class).inNamespace(TEST_NAMESPACE).withName(TEST_NAME);
-					await().during(Duration.ofSeconds(1)).failFast(() -> EXIST.test(testVirtualServiceGeneral)).until(() -> Boolean.TRUE);
+					await().during(Duration.ofSeconds(1)).failFast(() -> testVirtualServiceGeneral.get() != null).until(() -> Boolean.TRUE);
 				}
 			}
 		}
@@ -376,6 +392,7 @@ class IngressControllerTest {
 		return getService(() -> createServiceSpec(() -> createAnotherServicePort()));
 	}
 
+	@SuppressWarnings("boxing")
 	private static Service getService(Supplier<ServiceSpec> spec) {
 		return new ServiceBuilder(true)
 			.withMetadata(createMetadata(Map.of()))
@@ -383,12 +400,14 @@ class IngressControllerTest {
 			.build();
 	}
 
+	@SuppressWarnings("boxing")
 	private static ServiceSpec createServiceSpec(Supplier<List<ServicePort>> ports) {
 		return new ServiceSpecBuilder(true)
 			.withPorts(ports.get())
 			.build();
 	}
 
+	@SuppressWarnings("boxing")
 	private static List<ServicePort> createServicePort() {
 		return List.of(new ServicePortBuilder(true)
 			.withName("http")
@@ -396,6 +415,7 @@ class IngressControllerTest {
 			.build());
 	}
 
+	@SuppressWarnings("boxing")
 	private static List<ServicePort> createAnotherServicePort() {
 		return List.of(new ServicePortBuilder(true)
 			.withName("pgsql")
@@ -434,6 +454,22 @@ class IngressControllerTest {
 			.map(s -> s.getGateways())
 			.orElseGet(List::of)
 			.contains(TEST_NAME);
+	}
+
+	private static Ingress getIngressWithTwoRules() {
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createTwoRules));
+	}
+
+	private static Ingress getIngressWithImplementationSpecificPath() {
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithImplementationSpecificPath));
+	}
+
+	private static Ingress getIngressWithPrefixPath() {
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithPrefixPath));
+	}
+
+	private static Ingress getIngressWithExactPath() {
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithExactPath));
 	}
 
 	private static Ingress getIngressWithNamedPort() {
@@ -515,19 +551,43 @@ class IngressControllerTest {
 		return true;
 	}
 
+	private static List<IngressRule> createTwoRules() {
+		return createTwoRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNumberPort)), PathType.IMPLEMENTATION_SPECIFIC)));
+	}
+
+	private static List<IngressRule> createRulesWithImplementationSpecificPath() {
+		return createRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNumberPort)), PathType.IMPLEMENTATION_SPECIFIC)));
+	}
+
+	private static List<IngressRule> createRulesWithExactPath() {
+		return createRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNumberPort)), PathType.EXACT)));
+	}
+
+	private static List<IngressRule> createRulesWithPrefixPath() {
+		return createRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNumberPort)), PathType.PREFIX)));
+	}
+
 	private static List<IngressRule> createRulesWithNamedPort() {
-		return createRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNamedPort)))));
+		return createRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNamedPort)), PathType.IMPLEMENTATION_SPECIFIC)));
 	}
 
 	private static List<IngressRule> createRulesWithNumberPort() {
-		return createRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNumberPort)))));
+		return createRules(() -> createRuleValue(() -> createIngressPath(() -> createIngressBackend(() -> createIngressServiceBackend(IngressControllerTest::createServiceBackendNumberPort)), PathType.IMPLEMENTATION_SPECIFIC)));
 	}
 
 	private static List<IngressRule> createRules(Supplier<HTTPIngressRuleValue> http) {
-		return List.of(new IngressRuleBuilder()
-			.withHost("http.example.com")
+		return List.of(createRule("http.example.com", http));
+	}
+
+	private static List<IngressRule> createTwoRules(Supplier<HTTPIngressRuleValue> http) {
+		return List.of(createRule("http01.example.com", http), createRule("http02.example.com", http));
+	}
+
+	private static IngressRule createRule(String host, Supplier<HTTPIngressRuleValue> http) {
+		return new IngressRuleBuilder()
+			.withHost(host)
 			.withHttp(http.get())
-			.build());
+			.build();
 	}
 
 	private static HTTPIngressRuleValue createRuleValue(Supplier<HTTPIngressPath> path) {
@@ -536,10 +596,10 @@ class IngressControllerTest {
 			.build();
 	}
 
-	private static HTTPIngressPath createIngressPath(Supplier<IngressBackend> backend) {
+	private static HTTPIngressPath createIngressPath(Supplier<IngressBackend> backend, PathType pathType) {
 		return new HTTPIngressPathBuilder()
 			.withPath("/path")
-			.withPathType("ImplementationSpecific")
+			.withPathType(pathType.getType())
 			.withBackend(backend.get())
 			.build();
 	}
@@ -557,6 +617,7 @@ class IngressControllerTest {
 			.build();
 	}
 
+	@SuppressWarnings("boxing")
 	private static ServiceBackendPort createServiceBackendNumberPort() {
 		return new ServiceBackendPortBuilder()
 			.withNumber(80)
@@ -601,6 +662,7 @@ class IngressControllerTest {
 		return true;
 	}
 
+	@SuppressWarnings("boxing")
 	private static boolean checkPort(VirtualService toCheck) {
 		return checkPort(toCheck, hasProperty("number", is(80)));
 	}
@@ -615,9 +677,49 @@ class IngressControllerTest {
 			.map(VirtualServiceSpec::getHttp)
 			.orElseGet(List::of);
 
+//		routes.get(0).getRoute().get(0).getDestination().getPort().getNumber()
+
 		Matcher<Destination> destinationMatcher = hasProperty("port", portMatcher);
 		Matcher<HTTPRouteDestination> httpRouteDestinationMatcher = hasProperty("destination", destinationMatcher);
 		Matcher<HTTPRoute> httpRouteMatcher = hasProperty("route", contains(httpRouteDestinationMatcher));
+
+		assertThat(routes, contains(httpRouteMatcher));
+
+		return true;
+	}
+
+	private static boolean checkHost(VirtualService toCheck, String host) {
+		List<String> routes = Optional.ofNullable(toCheck)
+			.map(VirtualService::getSpec)
+			.map(VirtualServiceSpec::getHosts)
+			.orElseGet(List::of);
+
+		assertThat(routes, contains(host));
+
+		return true;
+	}
+
+	private static boolean checkExactPath(VirtualService toCheck) {
+		return checkPathType(toCheck, ExactMatchType.class);
+	}
+
+	private static boolean checkPrefixPath(VirtualService toCheck) {
+		return checkPathType(toCheck, PrefixMatchType.class);
+	}
+
+	private static boolean checkPathType(VirtualService toCheck, Class<? extends MatchType> matchTypeClass) {
+		List<HTTPRoute> routes = Optional.ofNullable(toCheck)
+			.map(VirtualService::getSpec)
+			.map(VirtualServiceSpec::getHttp)
+			.orElseGet(List::of);
+
+//		routes.get(0).getMatch().get(0).getUri().getMatchType()
+
+		Matcher<Object> stringPrefixMatchMatcher = hasProperty("prefix", is("/path"));
+		Matcher<Object> stringExactMatchMatcher = hasProperty("exact", is("/path"));
+		Matcher<StringMatch> stringMatchMatcher = hasProperty("matchType", allOf(instanceOf(matchTypeClass), anyOf(stringPrefixMatchMatcher, stringExactMatchMatcher)));
+		Matcher<HTTPMatchRequest> httpMatchRequestMatcher = hasProperty("uri", stringMatchMatcher);
+		Matcher<HTTPRoute> httpRouteMatcher = hasProperty("match", contains(httpMatchRequestMatcher));
 
 		assertThat(routes, contains(httpRouteMatcher));
 

@@ -1,8 +1,15 @@
 package org.jresearch.k8s.operator.istio.ingress.model;
 
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+
+@Getter
+@AllArgsConstructor
 public enum PathType {
-	ImplementationSpecific,
-	Exact,
-	Prefix,
+	IMPLEMENTATION_SPECIFIC("ImplementationSpecific"),
+	EXACT("Exact"),
+	PREFIX("Prefix"),
 	;
+
+	private final String type;
 }

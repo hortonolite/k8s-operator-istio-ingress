@@ -184,7 +184,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 	}
 
 	private static MatchType createMatchType(Path path) {
-		if (Exact == path.getPathType()) {
+		if (EXACT == path.getPathType()) {
 			return createExactMatchType(path.getPath());
 		}
 		return createPrefixMatchType(path.getPath());
