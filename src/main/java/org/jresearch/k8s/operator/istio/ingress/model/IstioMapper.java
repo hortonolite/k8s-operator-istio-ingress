@@ -9,6 +9,7 @@ import org.mapstruct.BeanMapping;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 
+import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressTLS;
 import me.snowdrop.istio.api.networking.v1beta1.Port;
 import me.snowdrop.istio.api.networking.v1beta1.PortBuilder;
@@ -40,7 +41,7 @@ public interface IstioMapper {
 	@Mapping(target = "bind", ignore = true)
 	@Mapping(target = "defaultEndpoint", ignore = true)
 	@Mapping(target = "name", ignore = true)
-	@BeanMapping(ignoreUnmappedSourceProperties = { "istioSelector", "name", "namespace", "rules", "tls" })
+	@BeanMapping(ignoreUnmappedSourceProperties = { "istioSelector", "name", "namespace", "rules", "tls", "ownerInfo", "httpsOnly" })
 	Server mapHttp(RoutingInfo info);
 
 	default ServerTLSSettings mapSecretName(String secretName) {
@@ -63,5 +64,10 @@ public interface IstioMapper {
 	Tls map(IngressTLS ingressTls);
 
 	List<Server> mapHttps(List<Tls> tls);
+
+	@Mapping(target = "name", source = "metadata.name")
+	@Mapping(target = "uid", source = "metadata.uid")
+	@BeanMapping(ignoreUnmappedSourceProperties = { "fullResourceName", "plural", "singular", "markedForDeletion", "additionalProperties", "spec", "status" })
+	OwnerInfo map(Ingress ingress);
 
 }

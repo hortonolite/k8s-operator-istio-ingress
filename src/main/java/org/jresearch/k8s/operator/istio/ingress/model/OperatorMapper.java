@@ -25,4 +25,8 @@ public interface OperatorMapper {
 	@BeanMapping(ignoreUnmappedSourceProperties = { "additionalProperties" })
 	Service map(IngressServiceBackend backend);
 
+	default PathType map(String pathType) {
+		return PathType.byString(pathType).orElse(null);
+	}
+
 }

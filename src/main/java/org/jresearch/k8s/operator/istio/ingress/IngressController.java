@@ -14,6 +14,7 @@ import javax.inject.Inject;
 import org.jresearch.k8s.operator.istio.ingress.model.IngressAnnotation;
 import org.jresearch.k8s.operator.istio.ingress.model.IstioMapper;
 import org.jresearch.k8s.operator.istio.ingress.model.OperatorMapper;
+import org.jresearch.k8s.operator.istio.ingress.model.OwnerInfo;
 import org.jresearch.k8s.operator.istio.ingress.model.Path;
 import org.jresearch.k8s.operator.istio.ingress.model.Port;
 import org.jresearch.k8s.operator.istio.ingress.model.RoutingInfo;
@@ -22,6 +23,8 @@ import org.jresearch.k8s.operator.istio.ingress.model.Tls;
 
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
+import io.fabric8.kubernetes.api.model.OwnerReference;
+import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.ServicePort;
 import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
@@ -119,7 +122,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		Log.infof("Create/update istio gateway for: %s", info);
 		NonNamespaceOperation<Gateway, GatewayList, Resource<Gateway>> gatewayClient = kubernetesClient.resources(Gateway.class, GatewayList.class).inNamespace(info.getNamespace());
 		Gateway gateway = new GatewayBuilder()
-			.withMetadata(createMetadata(info.getName(), info.getNamespace()))
+			.withMetadata(createMetadata(info.getName(), info.getNamespace(), info.getOwnerInfo()))
 			.withSpec(createGatewaySpec(info))
 			.build();
 		gatewayClient.createOrReplace(gateway);
@@ -137,7 +140,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		Log.infof("Create/update istio virtual service %s for: %s", index, info);
 		String virtualServiceName = genarateVirtualServiceName(info.getName(), index);
 		VirtualService virtualService = new VirtualServiceBuilder()
-			.withMetadata(createMetadata(virtualServiceName, info.getNamespace()))
+			.withMetadata(createMetadata(virtualServiceName, info.getNamespace(), info.getOwnerInfo()))
 			.withSpec(createVirtualServiceSpec(gatewayName, info.getNamespace(), rule))
 			.build();
 		virtualServiceClient.createOrReplace(virtualService);
@@ -269,10 +272,23 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.build();
 	}
 
-	private static ObjectMeta createMetadata(String name, String namespace) {
+	private static ObjectMeta createMetadata(String name, String namespace, OwnerInfo ownerInfo) {
 		return new ObjectMetaBuilder()
 			.withName(name)
 			.withNamespace(namespace)
+			.withOwnerReferences(createOwnerReferences(ownerInfo))
+			.build();
+	}
+
+	@SuppressWarnings("boxing")
+	private static OwnerReference createOwnerReferences(OwnerInfo ownerInfo) {
+		return new OwnerReferenceBuilder()
+			.withApiVersion(ownerInfo.getApiVersion())
+			.withBlockOwnerDeletion(true)
+			.withController(true)
+			.withKind(ownerInfo.getKind())
+			.withName(ownerInfo.getName())
+			.withUid(ownerInfo.getUid())
 			.build();
 	}
 
@@ -288,6 +304,8 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			Log.infof("Skip ingress %s. Ingress class %s is not a %s", getQualifiedName(ingress), ingressClassName, INGRESS_CLASSNAME);
 			return Optional.empty();
 		}
+		// process owner info
+
 		// ignore defaultBackend (?)
 
 		// process TLS
@@ -311,6 +329,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		return Optional.of(RoutingInfo.builder()
 			.name(ingress.getMetadata().getName())
 			.namespace(ingress.getMetadata().getNamespace())
+			.ownerInfo(istioMapper.map(ingress))
 			.istioSelector(istioSelector)
 			.tls(tls)
 			.httpsOnly(!allowHttpValue)

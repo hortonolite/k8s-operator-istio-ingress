@@ -19,6 +19,7 @@ import java.util.Optional;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import javax.inject.Inject;
 
@@ -120,7 +121,7 @@ class IngressControllerTest {
 	private static final Map<String, String> EXPECTED_DEFAULT_SELECTOR = Map.of("istio", "ingressgateway");
 
 	// check predicates
-	private static final Predicate<Object> TODO = t -> true;
+//	private static final Predicate<Object> TODO = t -> true;
 	private static final Predicate<Object> EXIST = Objects::nonNull;
 	private static final BiPredicate<HasMetadata, HasMetadata> OWNER = IngressControllerTest::checkOwner;
 	private static final Predicate<HasMetadata> NAMESPACE = IngressControllerTest::checkNamespace;
@@ -148,23 +149,28 @@ class IngressControllerTest {
 
 	@Getter
 	@AllArgsConstructor
-	private static enum GatevayParams {
-		SET01(getIstioIngress(), EXIST),
-		SET02(getIstioIngress(), OWNER),
-		SET03(getIstioIngress(), NAMESPACE),
-		SET04(getIstioIngress(), TODO),
-		SET05(getIstioIngress(), TLS),
-		SET06(getIngressWithRulesNoHttpDefault(), TLS),
-		SET07(getIngressWithRulesHttpFalse(), TLS),
-		SET08(getIngressWithRulesHttpTrue(), HTTP),
-		SET09(getIngressWithIstioSelectorDefault(), gw -> checkSelector(gw, EXPECTED_DEFAULT_SELECTOR)),
-		SET10(getIngressWithIstioSelectorSpecified(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),
+	private static enum CreateGatevayParams {
+		SET01("Should create the GW with desired name", getIstioIngress(), EXIST),
+		SET02("Should have correct owner record pointed to test ingress", getIstioIngress(), OWNER),
+		SET03("Should have the same NS as ingress", getIstioIngress(), NAMESPACE),
+		SET04("Should have correct TLS section for Ingress with TLS", getIstioIngress(), TLS),
+		SET05("Should have correct TLS section for Ingress without HTTPS anotation", getIngressWithRulesNoHttpDefault(), TLS),
+		SET06("Should have correct TLS section for Ingress with HTTPS anotation false", getIngressWithRulesHttpFalse(), TLS),
+		SET07("Should have correct TLS and gost sections for Ingress with HTTPS anotation true", getIngressWithRulesHttpTrue(), IngressControllerTest::checkHttp),
+		SET08("Check default selector to Istio ingress", getIngressWithIstioSelectorDefault(), gw -> checkSelector(gw, EXPECTED_DEFAULT_SELECTOR)),
+		SET09("Check custom selector to Istio ingress", getIngressWithIstioSelectorSpecified(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),
 		;
 
-		private GatevayParams(Ingress testIngress, Predicate<? super Gateway> testGateway) {
-			this(testIngress, wrap(testGateway));
+		private CreateGatevayParams(String testDescription, Ingress testIngress, Predicate<? super Gateway> testGateway) {
+			this(testDescription, testIngress, wrap(testGateway));
 		}
 
+		@Override
+		public String toString() {
+			return testDescription;
+		}
+
+		private final String testDescription;
 		private final Ingress testIngress;
 		private final BiPredicate<? super Ingress, ? super Gateway> testGateway;
 	}
@@ -172,21 +178,74 @@ class IngressControllerTest {
 	@ParameterizedTest
 	@EnumSource
 	@DisplayName("Should create Istio GW for provided ingress")
-	void testGatewayCreate(GatevayParams testData) {
+	void testGatewayCreate(CreateGatevayParams testData) {
 
-		var testIngressIstio = testData.getTestIngress();
-		var testGateway = testData.getTestGateway();
+		Ingress testIngressIstio = testData.getTestIngress();
+		BiPredicate<? super Ingress, ? super Gateway> testGateway = testData.getTestGateway();
 
 		try (NamespacedKubernetesClient client = mockServer.getClient()) {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					v1.ingresses().create(testIngressIstio);
-					controller.onAdd(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					controller.onAdd(ingressV1);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Check add
-					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(testIngressIstio, gw));
+					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(ingressV1, gw));
+				}
+			}
+		}
+
+	}
+
+	@Getter
+	@AllArgsConstructor
+	private static enum UpdateGatevayParams {
+		SET01("GW still the same on change untracked Ingress parameters", getIstioIngress(), IngressControllerTest::changeDescription, Object::equals),
+		;
+
+		private UpdateGatevayParams(String testDescription, Ingress testIngress, UnaryOperator<Ingress> ingressModificator, ChangePredicate<? super Gateway> testGateway) {
+			this(testDescription, testIngress, ingressModificator, ChangeBiPredicate.wrap(testGateway));
+		}
+
+		@Override
+		public String toString() {
+			return testDescription;
+		}
+
+		private final String testDescription;
+		private final Ingress testIngress;
+		private final UnaryOperator<Ingress> ingressModificator;
+		private final ChangeBiPredicate<? super Ingress, ? super Gateway> testGateway;
+	}
+
+	@ParameterizedTest
+	@EnumSource
+	@DisplayName("Should update Istio GW on ingress update")
+	void testGatewayUpdate(UpdateGatevayParams testData) {
+
+		Ingress testIngressIstio = testData.getTestIngress();
+		UnaryOperator<Ingress> ingressModificator = testData.getIngressModificator();
+		ChangeBiPredicate<? super Ingress, ? super Gateway> testGateway = testData.getTestGateway();
+
+		try (NamespacedKubernetesClient client = mockServer.getClient()) {
+			try (NetworkAPIGroupDSL network = client.network()) {
+				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
+					// Create and call controller
+					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
+					controller.onAdd(ingressV1);
+					// Check add
+					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), EXIST);
+					Gateway gatewayV1 = client.resources(Gateway.class, GatewayList.class).inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get();
+
+					Ingress ingressV2 = v1.ingresses().patch(ingressModificator.apply(ingressV1));
+					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
+					controller.onUpdate(ingressV1, ingressV2);
+
+					// Check update
+					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(ingressV1, gatewayV1, ingressV2, gw));
 				}
 			}
 		}
@@ -199,12 +258,12 @@ class IngressControllerTest {
 	private static enum VirtualServiceParams {
 		SET01("Should create the VS with desired name", getIngressWithRulesNoHttpDefault(), EXIST),
 		SET02("Should have correct owner record pointed to test ingress", getIngressWithRulesNoHttpDefault(), OWNER),
-		SET03("Should have the same NS as ingres", getIngressWithRulesNoHttpDefault(), NAMESPACE),
+		SET03("Should have the same NS as ingress", getIngressWithRulesNoHttpDefault(), NAMESPACE),
 		SET04("should have correct gateway name", getIngressWithRulesNoHttpDefault(), GW_NAME),
-		SET05("should have prefix path for ImplementationSpecific ingres", getIngressWithImplementationSpecificPath(), IngressControllerTest::checkPrefixPath),
-		SET06("should have prefix path for Prefix ingres", getIngressWithPrefixPath(), IngressControllerTest::checkPrefixPath),
-		SET07("should have exact path for Exact ingres", getIngressWithExactPath(), IngressControllerTest::checkExactPath),
-		SET08("should generate 2 VS for ingres with 2 rules", getIngressWithTwoRules(), vs -> checkHost(vs, "http01.example.com"), vs -> checkHost(vs, "http02.example.com")),
+		SET05("should have prefix path for ImplementationSpecific ingress", getIngressWithImplementationSpecificPath(), IngressControllerTest::checkPrefixPath),
+		SET06("should have prefix path for Prefix ingress", getIngressWithPrefixPath(), IngressControllerTest::checkPrefixPath),
+		SET07("should have exact path for Exact ingress", getIngressWithExactPath(), IngressControllerTest::checkExactPath),
+		SET08("should generate 2 VS for ingress with 2 rules", getIngressWithTwoRules(), vs -> checkHost(vs, "http01.example.com"), vs -> checkHost(vs, "http02.example.com")),
 		;
 
 		@SuppressWarnings("resource")
@@ -239,12 +298,12 @@ class IngressControllerTest {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					v1.ingresses().create(testIngressIstio);
-					controller.onAdd(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					controller.onAdd(ingressV1);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Check add
-					EntryStream.of(testVirtualService).forKeyValue((i, predicate) -> await().until(() -> getVirtualService(client, IngressController.genarateVirtualServiceName(TEST_NAME, i), TEST_NAMESPACE), vs -> predicate.test(testIngressIstio, vs)));
+					EntryStream.of(testVirtualService).forKeyValue((i, predicate) -> await().until(() -> getVirtualService(client, IngressController.genarateVirtualServiceName(TEST_NAME, i), TEST_NAMESPACE), vs -> predicate.test(ingressV1, vs)));
 				}
 			}
 		}
@@ -298,12 +357,12 @@ class IngressControllerTest {
 						assertNotNull(client.services().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 					}
 					// Create and call controller
-					v1.ingresses().create(testIngressIstio);
-					controller.onAdd(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					controller.onAdd(ingressV1);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Check add
-					EntryStream.of(testVirtualService).forKeyValue((i, predicate) -> await().until(() -> getVirtualService(client, IngressController.genarateVirtualServiceName(TEST_NAME, i), TEST_NAMESPACE), vs -> predicate.test(testIngressIstio, vs)));
+					EntryStream.of(testVirtualService).forKeyValue((i, predicate) -> await().until(() -> getVirtualService(client, IngressController.genarateVirtualServiceName(TEST_NAME, i), TEST_NAMESPACE), vs -> predicate.test(ingressV1, vs)));
 				}
 			}
 		}
@@ -321,8 +380,8 @@ class IngressControllerTest {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					v1.ingresses().create(testIngressGeneral);
-					controller.onAdd(testIngressGeneral);
+					Ingress ingress = v1.ingresses().create(testIngressGeneral);
+					controller.onAdd(ingress);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Chek ignore general
@@ -335,54 +394,6 @@ class IngressControllerTest {
 		}
 
 	}
-
-//	@Test
-//	@DisplayName("REMOVE IT!!!!")
-//	void testControllerT____to____remove____TODO() {
-////		String testNamespace = "test";
-////		String nameIstio = "test-ingress-istio";
-////		String nameGeneral = "test-ingress-general";
-//
-//		Ingress testIngressIstio = getIstioIngress();
-//
-//		try (NamespacedKubernetesClient client = mockServer.getClient()) {
-//
-//			// IngressController controller = new IngressController(client);
-//
-//			try (NetworkAPIGroupDSL network = client.network()) {
-//				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
-//					// update and call controller
-//					// v1.ingresses().create(testIngress);
-//					Ingress testNewIngress = new IngressBuilder(testIngressIstio)
-//						.editMetadata()
-//						.withResourceVersion("2")
-//						.and()
-//						.build();
-//					controller.onUpdate(testIngressIstio, testNewIngress);
-////					assertNotNull(v1.ingresses().inNamespace(testNamespace).withName(nameIstio).get());
-//
-//					// Check update
-//					// Assertions.assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
-//					// testGateway(client, testNamespace));
-//					// Assertions.assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
-//					// testVirtualService(client, testNamespace));
-//
-//					// Remove and call controller
-//					v1.ingresses().delete(testIngressIstio);
-//					controller.onDelete(testIngressIstio, false);
-////					assertNull(v1.ingresses().inNamespace(testNamespace).withName(nameIstio).get());
-//
-//					// Check remove
-//					// Assertions.assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
-//					// testGateway(client, testNamespace));
-//					// Assertions.assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
-//					// testVirtualService(client, testNamespace));
-//
-//				}
-//			}
-//		}
-//
-//	}
 
 	private static Service getServiceWithPort() {
 		return getService(() -> createServiceSpec(() -> createServicePort()));
@@ -724,5 +735,14 @@ class IngressControllerTest {
 		assertThat(routes, contains(httpRouteMatcher));
 
 		return true;
+	}
+
+	private static Ingress changeDescription(Ingress v1) {
+		return new IngressBuilder(v1)
+			.editMetadata()
+			.withResourceVersion("2")
+			.addToLabels("newLabel", "someValueOfNewLabel")
+			.endMetadata()
+			.build();
 	}
 }
