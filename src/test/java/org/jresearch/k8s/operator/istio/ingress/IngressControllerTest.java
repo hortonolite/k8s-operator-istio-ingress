@@ -100,6 +100,7 @@ class IngressControllerTest {
 	@Inject
 	IngressController controller;
 
+	private static final String CUSTOM_SELECTOR = "app=istio-ingressgateway,istio=ingressgateway";
 	private static final String TEST_NAMESPACE = "test";
 	private static final String TEST_NAME = "test-ingress-istio";
 
@@ -125,7 +126,7 @@ class IngressControllerTest {
 	private static final Predicate<Object> EXIST = Objects::nonNull;
 	private static final BiPredicate<HasMetadata, HasMetadata> OWNER = IngressControllerTest::checkOwner;
 	private static final Predicate<HasMetadata> NAMESPACE = IngressControllerTest::checkNamespace;
-	private static final Predicate<Gateway> TLS = IngressControllerTest::checkTls;
+	private static final Predicate<Gateway> TLS = IngressControllerTest::checkTlsOnly;
 	private static final Predicate<Gateway> HTTP = IngressControllerTest::checkHttp;
 	private static final Predicate<VirtualService> GW_NAME = IngressControllerTest::checkGwName;
 
@@ -156,7 +157,7 @@ class IngressControllerTest {
 		SET04("Should have correct TLS section for Ingress with TLS", getIstioIngress(), TLS),
 		SET05("Should have correct TLS section for Ingress without HTTPS anotation", getIngressWithRulesNoHttpDefault(), TLS),
 		SET06("Should have correct TLS section for Ingress with HTTPS anotation false", getIngressWithRulesHttpFalse(), TLS),
-		SET07("Should have correct TLS and gost sections for Ingress with HTTPS anotation true", getIngressWithRulesHttpTrue(), IngressControllerTest::checkHttp),
+		SET07("Should have correct TLS and host sections for Ingress with HTTPS anotation true", getIngressWithRulesHttpTrue(), IngressControllerTest::checkHttp),
 		SET08("Check default selector to Istio ingress", getIngressWithIstioSelectorDefault(), gw -> checkSelector(gw, EXPECTED_DEFAULT_SELECTOR)),
 		SET09("Check custom selector to Istio ingress", getIngressWithIstioSelectorSpecified(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),
 		;
@@ -202,7 +203,17 @@ class IngressControllerTest {
 	@Getter
 	@AllArgsConstructor
 	private static enum UpdateGatevayParams {
-		SET01("GW still the same on change untracked Ingress parameters", getIstioIngress(), IngressControllerTest::changeDescription, Object::equals),
+		SET01("On change untracked Ingress parameters GW still the same", getIstioIngress(), IngressControllerTest::changeDescription, Object::equals),
+		SET02("On add httpOnly false annotation GW hasn't the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpFalse, IngressControllerTest::checkNo2NoHttp),
+		SET03("On add httpOnly true annotation GW has the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpTrue, IngressControllerTest::checkNo2YesHttp),
+		SET04("On change httpOnly true -> false annotation GW hasn't the mapping for HTTP port", getIngressWithRulesHttpTrue(), IngressControllerTest::addHttpFalse, IngressControllerTest::checkYes2NoHttp),
+		SET05("On change httpOnly false -> true annotation GW has the mapping for HTTP port", getIngressWithRulesHttpFalse(), IngressControllerTest::addHttpTrue, IngressControllerTest::checkNo2YesHttp),
+		SET06("On remove httpOnly true annotation GW hasn't the mapping for HTTP port", getIngressWithRulesHttpTrue(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkYes2NoHttp),
+		SET07("On remove httpOnly false annotation new GW hasn't the mapping for HTTP port", getIngressWithRulesHttpFalse(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkNo2NoHttp),
+		SET08("On add istio selector annotation with default selector GW should have default selector", getIstioIngress(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkDefaul2DefaultSelector),
+		SET09("On add istio selector annotation with custom selector GW should have custom selector", getIstioIngress(), IngressControllerTest::addCustomSelector, IngressControllerTest::checkDefault2CustomSelector),
+		SET10("On change istio selector annotation GW should have updated selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkCustom2DefaultSelector),
+		SET11("On remove istio selector annotation GW should have default selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkCustom2DefaultSelector),
 		;
 
 		private UpdateGatevayParams(String testDescription, Ingress testIngress, UnaryOperator<Ingress> ingressModificator, ChangePredicate<? super Gateway> testGateway) {
@@ -263,7 +274,7 @@ class IngressControllerTest {
 		SET05("should have prefix path for ImplementationSpecific ingress", getIngressWithImplementationSpecificPath(), IngressControllerTest::checkPrefixPath),
 		SET06("should have prefix path for Prefix ingress", getIngressWithPrefixPath(), IngressControllerTest::checkPrefixPath),
 		SET07("should have exact path for Exact ingress", getIngressWithExactPath(), IngressControllerTest::checkExactPath),
-		SET08("should generate 2 VS for ingress with 2 rules", getIngressWithTwoRules(), vs -> checkHost(vs, "http01.example.com"), vs -> checkHost(vs, "http02.example.com")),
+		SET08("should generate 2 VS for ingress with 2 rules", getIngressWithTwoRules(), vs -> checkHost(vs, "www.example.com"), vs -> checkHost(vs, "http.example.com")),
 		;
 
 		@SuppressWarnings("resource")
@@ -504,7 +515,7 @@ class IngressControllerTest {
 	}
 
 	private static Ingress getIngressWithIstioSelectorSpecified() {
-		return getIngress(Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), "app=istio-ingressgateway,istio=ingressgateway"), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
+		return getIngress(Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), CUSTOM_SELECTOR), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
 	}
 
 	private static Ingress getNonIstioIngress() {
@@ -512,7 +523,7 @@ class IngressControllerTest {
 	}
 
 	private static Ingress getIstioIngress() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, List::of));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
 	}
 
 	private static Ingress getIngress(Map<String, String> annotations, Supplier<IngressSpec> spec) {
@@ -541,19 +552,19 @@ class IngressControllerTest {
 
 	private static List<IngressTLS> createTls() {
 		return List.of(new IngressTLSBuilder()
-			.withHosts("tls.example.com")
+			.withHosts("www.example.com")
 			.withSecretName("tls-example-com-tls")
 			.build());
 	}
 
-	private static boolean checkTls(Gateway toCheck) {
+	private static boolean checkTlsOnly(Gateway toCheck) {
 		List<Server> servers = Optional.ofNullable(toCheck)
 			.map(Gateway::getSpec)
 			.map(GatewaySpec::getServers)
 			.orElseGet(List::of);
 
 		Matcher<Server> tlsServerMatcher = allOf(
-			hasProperty("hosts", contains("tls.example.com")),
+			hasProperty("hosts", contains("www.example.com")),
 			hasProperty("port", MATCHER_PORT_HTTPS),
 			hasProperty("tls", MATCHER_TLS));
 
@@ -587,11 +598,11 @@ class IngressControllerTest {
 	}
 
 	private static List<IngressRule> createRules(Supplier<HTTPIngressRuleValue> http) {
-		return List.of(createRule("http.example.com", http));
+		return List.of(createRule("www.example.com", http));
 	}
 
 	private static List<IngressRule> createTwoRules(Supplier<HTTPIngressRuleValue> http) {
-		return List.of(createRule("http01.example.com", http), createRule("http02.example.com", http));
+		return List.of(createRule("www.example.com", http), createRule("http.example.com", http));
 	}
 
 	private static IngressRule createRule(String host, Supplier<HTTPIngressRuleValue> http) {
@@ -648,17 +659,25 @@ class IngressControllerTest {
 			.orElseGet(List::of);
 
 		Matcher<Server> tlsServerMatcher = allOf(
-			hasProperty("hosts", contains("tls.example.com")),
+			hasProperty("hosts", contains("www.example.com")),
 			hasProperty("port", MATCHER_PORT_HTTPS),
 			hasProperty("tls", MATCHER_TLS));
 
 		Matcher<Server> ruleServerMatcher = allOf(
-			hasProperty("hosts", contains("http.example.com")),
+			hasProperty("hosts", contains("www.example.com")),
 			hasProperty("port", MATCHER_PORT_HTTP));
 
 		assertThat(servers, containsInAnyOrder(tlsServerMatcher, ruleServerMatcher));
 
 		return true;
+	}
+
+	private static boolean checkDefaultSelector(Gateway toCheck) {
+		return checkSelector(toCheck, EXPECTED_DEFAULT_SELECTOR);
+	}
+
+	private static boolean checkCustomSelector(Gateway toCheck) {
+		return checkSelector(toCheck, EXPECTED_CUSTOM_SELECTOR);
 	}
 
 	private static boolean checkSelector(Gateway toCheck, Map<String, String> expectedSelector) {
@@ -745,4 +764,58 @@ class IngressControllerTest {
 			.endMetadata()
 			.build();
 	}
+
+	private static Ingress addHttpFalse(Ingress v1) {
+		return changeAnnotations(v1, Map.of(IngressAnnotation.ALLOW_HTTP.getName(), "false"));
+	}
+
+	private static Ingress addHttpTrue(Ingress v1) {
+		return changeAnnotations(v1, Map.of(IngressAnnotation.ALLOW_HTTP.getName(), "true"));
+	}
+
+	private static Ingress removeAnnotations(Ingress v1) {
+		return changeAnnotations(v1, Map.of());
+	}
+
+	private static Ingress changeAnnotations(Ingress v1, Map<String, String> annotations) {
+		return new IngressBuilder(v1)
+			.editMetadata()
+			.withResourceVersion("2")
+			.withAnnotations(annotations)
+			.endMetadata()
+			.build();
+	}
+
+	private static boolean checkNo2NoHttp(Gateway before, Gateway after) {
+		return checkTlsOnly(before) && checkTlsOnly(after);
+	}
+
+	private static boolean checkNo2YesHttp(Gateway before, Gateway after) {
+		return checkTlsOnly(before) && checkHttp(after);
+	}
+
+	private static boolean checkYes2NoHttp(Gateway before, Gateway after) {
+		return checkHttp(before) && checkTlsOnly(after);
+	}
+
+	private static boolean checkDefaul2DefaultSelector(Gateway before, Gateway after) {
+		return checkDefaultSelector(before) && checkDefaultSelector(after);
+	}
+
+	private static boolean checkCustom2DefaultSelector(Gateway before, Gateway after) {
+		return checkCustomSelector(before) && checkDefaultSelector(after);
+	}
+
+	private static boolean checkDefault2CustomSelector(Gateway before, Gateway after) {
+		return checkDefaultSelector(before) && checkCustomSelector(after);
+	}
+
+	private static Ingress addDefaultSelector(Ingress v1) {
+		return changeAnnotations(v1, Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), IngressAnnotation.ISTIO_SELECTOR.getDefaultValue()));
+	}
+
+	private static Ingress addCustomSelector(Ingress v1) {
+		return changeAnnotations(v1, Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), CUSTOM_SELECTOR));
+	}
+
 }

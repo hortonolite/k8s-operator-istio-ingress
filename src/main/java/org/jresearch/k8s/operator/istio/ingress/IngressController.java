@@ -80,26 +80,26 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 
 	@Override
 	public void onAdd(Ingress obj) {
-		Uni.createFrom()
-			.item(obj)
+		getIstioRoutingInfo(obj).ifPresent(info -> Uni.createFrom()
+			.item(info)
 			.emitOn(Infrastructure.getDefaultExecutor())
 			.subscribe()
-			.with(this::onAddOrUpdate);
+			.with(this::createOrUpdateIstioResources));
 	}
 
 	@Override
 	public void onUpdate(Ingress oldObj, Ingress newObj) {
+		Optional<RoutingInfo> oldInfo = getIstioRoutingInfo(oldObj);
+		Optional<RoutingInfo> newInfo = getIstioRoutingInfo(newObj);
 		// ignore the same objects
-		Optional<String> oldVersion = Optional.ofNullable(oldObj).map(Ingress::getMetadata).map(ObjectMeta::getResourceVersion);
-		Optional<String> newVersion = Optional.ofNullable(newObj).map(Ingress::getMetadata).map(ObjectMeta::getResourceVersion);
-		if (oldVersion.equals(newVersion)) {
+		if (oldInfo.equals(newInfo)) {
 			return;
 		}
-		Uni.createFrom()
-			.item(newObj)
+		newInfo.ifPresent(info -> Uni.createFrom()
+			.item(info)
 			.emitOn(Infrastructure.getDefaultExecutor())
 			.subscribe()
-			.with(this::onAddOrUpdate);
+			.with(this::createOrUpdateIstioResources));
 	}
 
 	@Override
@@ -110,12 +110,6 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.subscribe()
 			.with(this::onDelete);
 		Log.tracef("delete %s", getQualifiedName(obj));
-	}
-
-	private void onAddOrUpdate(Ingress ingress) {
-		Log.tracef("on add/update %s", getQualifiedName(ingress));
-		Optional<RoutingInfo> istioPratameters = getIstioRoutingInfo(ingress);
-		istioPratameters.ifPresent(this::createOrUpdateIstioResources);
 	}
 
 	private void createOrUpdateIstioResources(RoutingInfo info) {

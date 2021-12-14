@@ -10,7 +10,7 @@ import lombok.Getter;
 public enum IngressAnnotation {
 
 	ALLOW_HTTP("kubernetes.io/ingress.allow-http", Boolean.FALSE.toString()),
-	ISTIO_SELECTOR("k8sjresearch.org/istio-selector", "istio=ingressgateway"),
+	ISTIO_SELECTOR("k8s.jresearch.org/istio-selector", "istio=ingressgateway"),
 
 	;
 
