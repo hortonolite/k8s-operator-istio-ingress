@@ -1,13 +1,13 @@
 package org.jresearch.k8s.operator.istio.ingress;
 
 import static org.awaitility.Awaitility.*;
-import static org.hamcrest.CoreMatchers.allOf;
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.*;
 import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -16,7 +16,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
@@ -109,14 +111,21 @@ class IngressControllerTest {
 		hasProperty("name", is("http")),
 		hasProperty("number", is(80)),
 		hasProperty("protocol", is("HTTP")));
-	private static final Matcher<Port> MATCHER_TLS = allOf(
-		hasProperty("credentialName", is("tls-example-com-tls")),
+	private static final Function<String, Matcher<Port>> MATCHER_TLS = name -> allOf(
+		hasProperty("credentialName", is(name)),
 		hasProperty("mode", is(ServerTLSSettingsMode.SIMPLE)));
 	@SuppressWarnings("boxing")
 	private static final Matcher<Port> MATCHER_PORT_HTTPS = allOf(
 		hasProperty("name", is("https")),
 		hasProperty("number", is(443)),
 		hasProperty("protocol", is("HTTPS")));
+	private static final BiFunction<String, String, Matcher<Server>> TLS_SERVER_MATCHER = (host, secret) -> allOf(
+		hasProperty("hosts", contains(host)),
+		hasProperty("port", MATCHER_PORT_HTTPS),
+		hasProperty("tls", MATCHER_TLS.apply(secret)));
+	private static final Function<String, Matcher<Server>> RULE_SERVER_MATCHER = host -> allOf(
+		hasProperty("hosts", contains(host)),
+		hasProperty("port", MATCHER_PORT_HTTP));
 
 	private static final Map<String, String> EXPECTED_CUSTOM_SELECTOR = Map.of("app", "istio-ingressgateway", "istio", "ingressgateway");
 	private static final Map<String, String> EXPECTED_DEFAULT_SELECTOR = Map.of("istio", "ingressgateway");
@@ -159,8 +168,7 @@ class IngressControllerTest {
 		SET06("Should have correct TLS section for Ingress with HTTPS anotation false", getIngressWithRulesHttpFalse(), TLS),
 		SET07("Should have correct TLS and host sections for Ingress with HTTPS anotation true", getIngressWithRulesHttpTrue(), IngressControllerTest::checkHttp),
 		SET08("Check default selector to Istio ingress", getIngressWithIstioSelectorDefault(), gw -> checkSelector(gw, EXPECTED_DEFAULT_SELECTOR)),
-		SET09("Check custom selector to Istio ingress", getIngressWithIstioSelectorSpecified(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),
-		;
+		SET09("Check custom selector to Istio ingress", getIngressWithIstioSelectorSpecified(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),;
 
 		private CreateGatevayParams(String testDescription, Ingress testIngress, Predicate<? super Gateway> testGateway) {
 			this(testDescription, testIngress, wrap(testGateway));
@@ -214,6 +222,15 @@ class IngressControllerTest {
 		SET09("On add istio selector annotation with custom selector GW should have custom selector", getIstioIngress(), IngressControllerTest::addCustomSelector, IngressControllerTest::checkDefault2CustomSelector),
 		SET10("On change istio selector annotation GW should have updated selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkCustom2DefaultSelector),
 		SET11("On remove istio selector annotation GW should have default selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkCustom2DefaultSelector),
+		SET12("On add new ingress TLS GW should update tls list", getIstioIngress(), IngressControllerTest::addNewTls, IngressControllerTest::checkOne2TwoTls),
+		SET13("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsHost, IngressControllerTest::checkNewHostTls),
+		SET14("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsSecret, IngressControllerTest::checkNewSecretTls),
+		SET15("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsBoth, IngressControllerTest::checkNewBothTls),
+		SET16("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
+
+		// istio -> non istio
+//		SET11("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
+//		SET11("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
 		;
 
 		private UpdateGatevayParams(String testDescription, Ingress testIngress, UnaryOperator<Ingress> ingressModificator, ChangePredicate<? super Gateway> testGateway) {
@@ -274,8 +291,7 @@ class IngressControllerTest {
 		SET05("should have prefix path for ImplementationSpecific ingress", getIngressWithImplementationSpecificPath(), IngressControllerTest::checkPrefixPath),
 		SET06("should have prefix path for Prefix ingress", getIngressWithPrefixPath(), IngressControllerTest::checkPrefixPath),
 		SET07("should have exact path for Exact ingress", getIngressWithExactPath(), IngressControllerTest::checkExactPath),
-		SET08("should generate 2 VS for ingress with 2 rules", getIngressWithTwoRules(), vs -> checkHost(vs, "www.example.com"), vs -> checkHost(vs, "http.example.com")),
-		;
+		SET08("should generate 2 VS for ingress with 2 rules", getIngressWithTwoRules(), vs -> checkHost(vs, "www.example.com"), vs -> checkHost(vs, "http.example.com")),;
 
 		@SuppressWarnings("resource")
 		private VirtualServiceParams(String testDescription, Ingress testIngress, Predicate<? super VirtualService>... testVirtualServices) {
@@ -327,8 +343,7 @@ class IngressControllerTest {
 	private static enum VirtualServicePortResolveParams {
 		SET01("Ingress with named port and existing service with port", getIngressWithNamedPort(), getServiceWithPort(), IngressControllerTest::checkPort),
 		SET02("Ingress with named port and nonexisting service", getIngressWithNamedPort(), null, IngressControllerTest::checkNoPort),
-		SET03("Ingress with named port and existing service without port", getIngressWithNamedPort(), getServiceWithoutPort(), IngressControllerTest::checkNoPort),
-		;
+		SET03("Ingress with named port and existing service without port", getIngressWithNamedPort(), getServiceWithoutPort(), IngressControllerTest::checkNoPort),;
 
 		private VirtualServicePortResolveParams(String testDescription, Ingress testIngress, Service testService, Predicate<? super VirtualService> testVirtualService) {
 			this(testDescription, testIngress, testService, wrap(testVirtualService));
@@ -526,6 +541,10 @@ class IngressControllerTest {
 		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
 	}
 
+	private static Ingress getIstioIngressWithTwoTls() {
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTwoTls, IngressControllerTest::createRulesWithNumberPort));
+	}
+
 	private static Ingress getIngress(Map<String, String> annotations, Supplier<IngressSpec> spec) {
 		return new IngressBuilder()
 			.withMetadata(createMetadata(annotations))
@@ -551,10 +570,20 @@ class IngressControllerTest {
 	}
 
 	private static List<IngressTLS> createTls() {
-		return List.of(new IngressTLSBuilder()
-			.withHosts("www.example.com")
-			.withSecretName("tls-example-com-tls")
-			.build());
+		return List.of(createTls("www.example.com", "www-example-com-tls"));
+	}
+
+	private static List<IngressTLS> createTwoTls() {
+		return List.of(
+			createTls("www.example.com", "www-example-com-tls"),
+			createTls("tls.example.com", "tls-example-com-tls"));
+	}
+
+	private static IngressTLS createTls(String host, String secret) {
+		return new IngressTLSBuilder()
+			.withHosts(host)
+			.withSecretName(secret)
+			.build();
 	}
 
 	private static boolean checkTlsOnly(Gateway toCheck) {
@@ -563,12 +592,7 @@ class IngressControllerTest {
 			.map(GatewaySpec::getServers)
 			.orElseGet(List::of);
 
-		Matcher<Server> tlsServerMatcher = allOf(
-			hasProperty("hosts", contains("www.example.com")),
-			hasProperty("port", MATCHER_PORT_HTTPS),
-			hasProperty("tls", MATCHER_TLS));
-
-		assertThat(servers, containsInAnyOrder(tlsServerMatcher));
+		assertThat(servers, containsInAnyOrder(TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls")));
 
 		return true;
 	}
@@ -658,16 +682,7 @@ class IngressControllerTest {
 			.map(GatewaySpec::getServers)
 			.orElseGet(List::of);
 
-		Matcher<Server> tlsServerMatcher = allOf(
-			hasProperty("hosts", contains("www.example.com")),
-			hasProperty("port", MATCHER_PORT_HTTPS),
-			hasProperty("tls", MATCHER_TLS));
-
-		Matcher<Server> ruleServerMatcher = allOf(
-			hasProperty("hosts", contains("www.example.com")),
-			hasProperty("port", MATCHER_PORT_HTTP));
-
-		assertThat(servers, containsInAnyOrder(tlsServerMatcher, ruleServerMatcher));
+		assertThat(servers, containsInAnyOrder(TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls"), RULE_SERVER_MATCHER.apply("www.example.com")));
 
 		return true;
 	}
@@ -759,7 +774,6 @@ class IngressControllerTest {
 	private static Ingress changeDescription(Ingress v1) {
 		return new IngressBuilder(v1)
 			.editMetadata()
-			.withResourceVersion("2")
 			.addToLabels("newLabel", "someValueOfNewLabel")
 			.endMetadata()
 			.build();
@@ -780,7 +794,6 @@ class IngressControllerTest {
 	private static Ingress changeAnnotations(Ingress v1, Map<String, String> annotations) {
 		return new IngressBuilder(v1)
 			.editMetadata()
-			.withResourceVersion("2")
 			.withAnnotations(annotations)
 			.endMetadata()
 			.build();
@@ -818,4 +831,88 @@ class IngressControllerTest {
 		return changeAnnotations(v1, Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), CUSTOM_SELECTOR));
 	}
 
+	private static Ingress addNewTls(Ingress v1) {
+		return new IngressBuilder(v1)
+			.editSpec()
+			.addToTls(createTls("tls.example.com", "tls-example-com-tls"))
+			.endSpec()
+			.build();
+	}
+
+	private static Ingress updateTlsHost(Ingress v1) {
+		return new IngressBuilder(v1)
+			.editSpec()
+			.withTls(createTls("tls.example.com", "www-example-com-tls"))
+			.endSpec()
+			.build();
+	}
+
+	private static Ingress updateTlsSecret(Ingress v1) {
+		return new IngressBuilder(v1)
+			.editSpec()
+			.withTls(createTls("www.example.com", "tls-example-com-tls"))
+			.endSpec()
+			.build();
+	}
+
+	private static Ingress updateTlsBoth(Ingress v1) {
+		return new IngressBuilder(v1)
+			.editSpec()
+			.withTls(createTls("tls.example.com", "tls-example-com-tls"))
+			.endSpec()
+			.build();
+	}
+
+	private static Ingress removeTls(Ingress v1) {
+		return new IngressBuilder(v1)
+			.editSpec()
+			.withTls(createTls("www.example.com", "www-example-com-tls"))
+			.endSpec()
+			.build();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static boolean checkTls(Gateway toCheck, Matcher<Server>... machers) {
+		List<Server> servers = Optional.ofNullable(toCheck)
+			.map(Gateway::getSpec)
+			.map(GatewaySpec::getServers)
+			.orElseGet(List::of);
+
+		assertThat(servers, containsInAnyOrder(machers));
+
+		return true;
+	}
+
+	private static boolean checkOne2TwoTls(Gateway before, Gateway after) {
+		return checkOneTls(before) && checkTwoTls(after);
+	}
+
+	private static boolean checkTwo2OneTls(Gateway before, Gateway after) {
+		return checkTwoTls(before) && checkOneTls(after);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static boolean checkOneTls(Gateway toCheck) {
+		return checkTls(toCheck, TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls"));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static boolean checkTwoTls(Gateway toCheck) {
+		return checkTls(toCheck, TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls"), TLS_SERVER_MATCHER.apply("tls.example.com", "tls-example-com-tls"));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static boolean checkNewHostTls(Gateway before, Gateway after) {
+		return checkTls(before, TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls")) && checkTls(after, TLS_SERVER_MATCHER.apply("tls.example.com", "www-example-com-tls"));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static boolean checkNewSecretTls(Gateway before, Gateway after) {
+		return checkTls(before, TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls")) && checkTls(after, TLS_SERVER_MATCHER.apply("www.example.com", "tls-example-com-tls"));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static boolean checkNewBothTls(Gateway before, Gateway after) {
+		return checkTls(before, TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls")) && checkTls(after, TLS_SERVER_MATCHER.apply("tls.example.com", "tls-example-com-tls"));
+	}
 }
