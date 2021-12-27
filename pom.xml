@@ -18,12 +18,13 @@
 		<!-- sonar w/o tests -->
 		<sonar.tests/>
 		<!-- ⬇️⬇️⬇️Dependencies version properties⬇️⬇️⬇️ -->
-		<quarkus.platform.version>2.4.2.Final</quarkus.platform.version>
-		<quarkus-operator-sdk.version>2.0.0.CR2</quarkus-operator-sdk.version>
-		<istio-client.version>1.7.7.1</istio-client.version>
-		<operator-framework-core.version>1.9.9</operator-framework-core.version>
-		<kubernetes-client.version>5.9.0</kubernetes-client.version>
+		<quarkus.platform.version>2.6.1.Final</quarkus.platform.version>
+		<quarkus-operator-sdk.version>2.0.2</quarkus-operator-sdk.version>
+		<operator-framework-core.version>1.10.1</operator-framework-core.version>
+		<kubernetes-client.version>5.11.0</kubernetes-client.version>
 		<mapstruct.version>1.5.0.Beta1</mapstruct.version>
+		<truth.version>1.1.3</truth.version>
+		<streamex.version>0.8.1</streamex.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -47,23 +48,27 @@
 				<version>${quarkus-operator-sdk.version}</version>
 			</dependency>
 			<dependency>
-				<groupId>me.snowdrop</groupId>
-				<artifactId>istio-client</artifactId>
-				<version>${istio-client.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>me.snowdrop</groupId>
-				<artifactId>istio-model</artifactId>
-				<version>${istio-client.version}</version>
-			</dependency>
-			<dependency>
 				<groupId>io.javaoperatorsdk</groupId>
 				<artifactId>operator-framework-core</artifactId>
 				<version>${operator-framework-core.version}</version>
 			</dependency>
+			<dependency>
+				<groupId>com.google.truth</groupId>
+				<artifactId>truth</artifactId>
+				<version>${truth.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.google.truth.extensions</groupId>
+				<artifactId>truth-java8-extension</artifactId>
+				<version>${truth.version}</version>
+			</dependency>
 		</dependencies>
 	</dependencyManagement>
 	<dependencies>
+		<dependency>
+			<groupId>io.fabric8</groupId>
+			<artifactId>istio-client</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>jakarta.enterprise</groupId>
 			<artifactId>jakarta.enterprise.cdi-api</artifactId>
@@ -71,10 +76,6 @@
 		<dependency>
 			<groupId>io.smallrye.reactive</groupId>
 			<artifactId>mutiny</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>me.snowdrop</groupId>
-			<artifactId>istio-model</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.mapstruct</groupId>
@@ -87,7 +88,6 @@
 		<dependency>
 			<groupId>one.util</groupId>
 			<artifactId>streamex</artifactId>
-			<version>0.8.0</version>
 		</dependency>
 		<dependency>
 			<groupId>io.quarkus</groupId>
@@ -153,18 +153,21 @@
 		<dependency>
 			<groupId>com.google.truth</groupId>
 			<artifactId>truth</artifactId>
-			<version>1.1.3</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>com.google.truth.extensions</groupId>
 			<artifactId>truth-java8-extension</artifactId>
-			<version>1.1.3</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.hamcrest</groupId>
 			<artifactId>hamcrest</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-params</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<!-- quarkus build -->
@@ -186,6 +189,10 @@
 			<plugin>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<configuration>
+					<configuration>
+						<source>17</source>
+						<target>17</target>
+					</configuration>
 					<annotationProcessorPaths>
 						<path>
 							<groupId>org.mapstruct</groupId>
@@ -209,9 +216,14 @@
 				<artifactId>maven-dependency-plugin</artifactId>
 				<!-- To correct work of quarkus -->
 				<configuration>
+					<failOnWarning>false</failOnWarning>
+					<skip>true</skip>
 					<ignoredUnusedDeclaredDependencies>
 						<ignoredUnusedDeclaredDependency>io.quarkus</ignoredUnusedDeclaredDependency>
 						<ignoredUnusedDeclaredDependency>io.quarkiverse.operatorsdk:quarkus-operator-sdk</ignoredUnusedDeclaredDependency>
+						<!-- <ignoredUnusedDeclaredDependency>io.fabric8:kubernetes-model-core:jar</ignoredUnusedDeclaredDependency>
+						<ignoredUnusedDeclaredDependency>io.fabric8:kubernetes-client:jar</ignoredUnusedDeclaredDependency>
+						<ignoredUnusedDeclaredDependency>io.fabric8:kubernetes-model-networking:jar</ignoredUnusedDeclaredDependency> -->
 					</ignoredUnusedDeclaredDependencies>
 				</configuration>
 			</plugin>
@@ -242,9 +254,10 @@
 							<systemProperties>
 								<quarkus.container-image.push>true</quarkus.container-image.push>
 								<quarkus.container-image.build>true</quarkus.container-image.build>
-								<quarkus.package.type>native</quarkus.package.type>
+								<!-- <quarkus.package.type>native</quarkus.package.type> -->
 								<quarkus.native.container-build>true</quarkus.native.container-build>
 								<quarkus.native.builder-image>quay.io/quarkus/ubi-quarkus-native-image:21.3-java17</quarkus.native.builder-image>
+								<quarkus.native.native-image-xmx>16g</quarkus.native.native-image-xmx>
 							</systemProperties>
 						</configuration>
 					</execution>

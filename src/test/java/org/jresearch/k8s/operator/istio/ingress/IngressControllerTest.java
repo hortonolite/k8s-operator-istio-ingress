@@ -34,6 +34,23 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import io.fabric8.istio.api.networking.v1beta1.Destination;
+import io.fabric8.istio.api.networking.v1beta1.Gateway;
+import io.fabric8.istio.api.networking.v1beta1.GatewayList;
+import io.fabric8.istio.api.networking.v1beta1.GatewaySpec;
+import io.fabric8.istio.api.networking.v1beta1.HTTPMatchRequest;
+import io.fabric8.istio.api.networking.v1beta1.HTTPRoute;
+import io.fabric8.istio.api.networking.v1beta1.HTTPRouteDestination;
+import io.fabric8.istio.api.networking.v1beta1.IsStringMatchMatchType;
+import io.fabric8.istio.api.networking.v1beta1.Port;
+import io.fabric8.istio.api.networking.v1beta1.Server;
+import io.fabric8.istio.api.networking.v1beta1.ServerTLSSettingsTLSmode;
+import io.fabric8.istio.api.networking.v1beta1.StringMatch;
+import io.fabric8.istio.api.networking.v1beta1.StringMatchExact;
+import io.fabric8.istio.api.networking.v1beta1.StringMatchPrefix;
+import io.fabric8.istio.api.networking.v1beta1.VirtualService;
+import io.fabric8.istio.api.networking.v1beta1.VirtualServiceList;
+import io.fabric8.istio.api.networking.v1beta1.VirtualServiceSpec;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
@@ -73,23 +90,6 @@ import io.quarkus.test.kubernetes.client.KubernetesTestServer;
 import io.quarkus.test.kubernetes.client.WithKubernetesTestServer;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
-import me.snowdrop.istio.api.networking.v1beta1.Destination;
-import me.snowdrop.istio.api.networking.v1beta1.ExactMatchType;
-import me.snowdrop.istio.api.networking.v1beta1.Gateway;
-import me.snowdrop.istio.api.networking.v1beta1.GatewayList;
-import me.snowdrop.istio.api.networking.v1beta1.GatewaySpec;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPMatchRequest;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPRoute;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteDestination;
-import me.snowdrop.istio.api.networking.v1beta1.Port;
-import me.snowdrop.istio.api.networking.v1beta1.PrefixMatchType;
-import me.snowdrop.istio.api.networking.v1beta1.Server;
-import me.snowdrop.istio.api.networking.v1beta1.ServerTLSSettingsMode;
-import me.snowdrop.istio.api.networking.v1beta1.StringMatch;
-import me.snowdrop.istio.api.networking.v1beta1.StringMatch.MatchType;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualService;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceList;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceSpec;
 import one.util.streamex.EntryStream;
 import one.util.streamex.StreamEx;
 
@@ -113,7 +113,7 @@ class IngressControllerTest {
 		hasProperty("protocol", is("HTTP")));
 	private static final Function<String, Matcher<Port>> MATCHER_TLS = name -> allOf(
 		hasProperty("credentialName", is(name)),
-		hasProperty("mode", is(ServerTLSSettingsMode.SIMPLE)));
+		hasProperty("mode", is(ServerTLSSettingsTLSmode.SIMPLE)));
 	@SuppressWarnings("boxing")
 	private static final Matcher<Port> MATCHER_PORT_HTTPS = allOf(
 		hasProperty("name", is("https")),
@@ -211,26 +211,30 @@ class IngressControllerTest {
 	@Getter
 	@AllArgsConstructor
 	private static enum UpdateGatevayParams {
-		SET01("On change untracked Ingress parameters GW still the same", getIstioIngress(), IngressControllerTest::changeDescription, Object::equals),
-		SET02("On add httpOnly false annotation GW hasn't the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpFalse, IngressControllerTest::checkNo2NoHttp),
-		SET03("On add httpOnly true annotation GW has the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpTrue, IngressControllerTest::checkNo2YesHttp),
-		SET04("On change httpOnly true -> false annotation GW hasn't the mapping for HTTP port", getIngressWithRulesHttpTrue(), IngressControllerTest::addHttpFalse, IngressControllerTest::checkYes2NoHttp),
-		SET05("On change httpOnly false -> true annotation GW has the mapping for HTTP port", getIngressWithRulesHttpFalse(), IngressControllerTest::addHttpTrue, IngressControllerTest::checkNo2YesHttp),
-		SET06("On remove httpOnly true annotation GW hasn't the mapping for HTTP port", getIngressWithRulesHttpTrue(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkYes2NoHttp),
-		SET07("On remove httpOnly false annotation new GW hasn't the mapping for HTTP port", getIngressWithRulesHttpFalse(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkNo2NoHttp),
-		SET08("On add istio selector annotation with default selector GW should have default selector", getIstioIngress(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkDefaul2DefaultSelector),
-		SET09("On add istio selector annotation with custom selector GW should have custom selector", getIstioIngress(), IngressControllerTest::addCustomSelector, IngressControllerTest::checkDefault2CustomSelector),
-		SET10("On change istio selector annotation GW should have updated selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkCustom2DefaultSelector),
-		SET11("On remove istio selector annotation GW should have default selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkCustom2DefaultSelector),
-		SET12("On add new ingress TLS GW should update tls list", getIstioIngress(), IngressControllerTest::addNewTls, IngressControllerTest::checkOne2TwoTls),
-		SET13("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsHost, IngressControllerTest::checkNewHostTls),
-		SET14("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsSecret, IngressControllerTest::checkNewSecretTls),
-		SET15("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsBoth, IngressControllerTest::checkNewBothTls),
-		SET16("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
-
+		// Untracked ingress
+		UNTRACKED01("On change untracked Ingress parameters GW still the same", getIstioIngress(), IngressControllerTest::changeDescription, Object::equals),
 		// istio -> non istio
 //		SET11("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
 //		SET11("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
+		// httpOnly annotation
+		HTTP_ONLY01("On add httpOnly false annotation GW hasn't the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpFalse, IngressControllerTest::checkNo2NoHttp),
+		HTTP_ONLY02("On add httpOnly true annotation GW has the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpTrue, IngressControllerTest::checkNo2YesHttp),
+		HTTP_ONLY03("On change httpOnly true -> false annotation GW hasn't the mapping for HTTP port", getIngressWithRulesHttpTrue(), IngressControllerTest::addHttpFalse, IngressControllerTest::checkYes2NoHttp),
+		HTTP_ONLY04("On change httpOnly false -> true annotation GW has the mapping for HTTP port", getIngressWithRulesHttpFalse(), IngressControllerTest::addHttpTrue, IngressControllerTest::checkNo2YesHttp),
+		HTTP_ONLY05("On remove httpOnly true annotation GW hasn't the mapping for HTTP port", getIngressWithRulesHttpTrue(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkYes2NoHttp),
+		HTTP_ONLY06("On remove httpOnly false annotation new GW hasn't the mapping for HTTP port", getIngressWithRulesHttpFalse(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkNo2NoHttp),
+		// istio selector annotation
+		SELECTOR01("On add istio selector annotation with default selector GW should have default selector", getIstioIngress(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkDefaul2DefaultSelector),
+		SELECTOR02("On add istio selector annotation with custom selector GW should have custom selector", getIstioIngress(), IngressControllerTest::addCustomSelector, IngressControllerTest::checkDefault2CustomSelector),
+		SELECTOR03("On change istio selector annotation GW should have updated selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkCustom2DefaultSelector),
+		SELECTOR04("On remove istio selector annotation GW should have default selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkCustom2DefaultSelector),
+		// TLS
+		TLS01("On add new ingress TLS GW should update tls list", getIstioIngress(), IngressControllerTest::addNewTls, IngressControllerTest::checkOne2TwoTls),
+		TLS02("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsHost, IngressControllerTest::checkNewHostTls),
+		TLS03("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsSecret, IngressControllerTest::checkNewSecretTls),
+		TLS04("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsBoth, IngressControllerTest::checkNewBothTls),
+		TLS05("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
+
 		;
 
 		private UpdateGatevayParams(String testDescription, Ingress testIngress, UnaryOperator<Ingress> ingressModificator, ChangePredicate<? super Gateway> testGateway) {
@@ -745,14 +749,14 @@ class IngressControllerTest {
 	}
 
 	private static boolean checkExactPath(VirtualService toCheck) {
-		return checkPathType(toCheck, ExactMatchType.class);
+		return checkPathType(toCheck, StringMatchExact.class);
 	}
 
 	private static boolean checkPrefixPath(VirtualService toCheck) {
-		return checkPathType(toCheck, PrefixMatchType.class);
+		return checkPathType(toCheck, StringMatchPrefix.class);
 	}
 
-	private static boolean checkPathType(VirtualService toCheck, Class<? extends MatchType> matchTypeClass) {
+	private static boolean checkPathType(VirtualService toCheck, Class<? extends IsStringMatchMatchType> matchTypeClass) {
 		List<HTTPRoute> routes = Optional.ofNullable(toCheck)
 			.map(VirtualService::getSpec)
 			.map(VirtualServiceSpec::getHttp)

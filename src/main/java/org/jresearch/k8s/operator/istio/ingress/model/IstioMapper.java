@@ -9,14 +9,13 @@ import org.mapstruct.BeanMapping;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 
+import io.fabric8.istio.api.networking.v1beta1.PortBuilder;
+import io.fabric8.istio.api.networking.v1beta1.Server;
+import io.fabric8.istio.api.networking.v1beta1.ServerTLSSettings;
+import io.fabric8.istio.api.networking.v1beta1.ServerTLSSettingsBuilder;
+import io.fabric8.istio.api.networking.v1beta1.ServerTLSSettingsTLSmode;
 import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressTLS;
-import me.snowdrop.istio.api.networking.v1beta1.Port;
-import me.snowdrop.istio.api.networking.v1beta1.PortBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.Server;
-import me.snowdrop.istio.api.networking.v1beta1.ServerTLSSettings;
-import me.snowdrop.istio.api.networking.v1beta1.ServerTLSSettingsBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.ServerTLSSettingsMode;
 
 @Mapper(componentModel = CDI, unmappedSourcePolicy = WARN, unmappedTargetPolicy = ERROR)
 public interface IstioMapper {
@@ -33,6 +32,7 @@ public interface IstioMapper {
 	@Mapping(target = "bind", ignore = true)
 	@Mapping(target = "defaultEndpoint", ignore = true)
 	@Mapping(target = "name", ignore = true)
+	@Mapping(target = "additionalProperties", ignore = true)
 	Server mapHttps(Tls tls);
 
 	@Mapping(target = "port", constant = HTTP_PROTOCOL)
@@ -41,17 +41,18 @@ public interface IstioMapper {
 	@Mapping(target = "bind", ignore = true)
 	@Mapping(target = "defaultEndpoint", ignore = true)
 	@Mapping(target = "name", ignore = true)
+	@Mapping(target = "additionalProperties", ignore = true)
 	@BeanMapping(ignoreUnmappedSourceProperties = { "istioSelector", "name", "namespace", "rules", "tls", "ownerInfo", "httpsOnly" })
 	Server mapHttp(RoutingInfo info);
 
 	default ServerTLSSettings mapSecretName(String secretName) {
 		return new ServerTLSSettingsBuilder()
 			.withCredentialName(secretName)
-			.withMode(ServerTLSSettingsMode.SIMPLE)
+			.withMode(ServerTLSSettingsTLSmode.SIMPLE)
 			.build();
 	}
 
-	default Port mapPort(String protocol) {
+	default io.fabric8.istio.api.networking.v1beta1.Port mapPort(String protocol) {
 		return new PortBuilder()
 			.withName(protocol.toLowerCase())
 			.withNumber(HTTP_PROTOCOL.equals(protocol) ? HTTP_PORT : HTTPS_PORT)

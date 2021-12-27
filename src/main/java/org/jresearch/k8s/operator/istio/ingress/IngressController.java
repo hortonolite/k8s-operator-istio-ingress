@@ -21,6 +21,31 @@ import org.jresearch.k8s.operator.istio.ingress.model.RoutingInfo;
 import org.jresearch.k8s.operator.istio.ingress.model.Rule;
 import org.jresearch.k8s.operator.istio.ingress.model.Tls;
 
+import io.fabric8.istio.api.networking.v1beta1.Destination;
+import io.fabric8.istio.api.networking.v1beta1.DestinationBuilder;
+import io.fabric8.istio.api.networking.v1beta1.Gateway;
+import io.fabric8.istio.api.networking.v1beta1.GatewayBuilder;
+import io.fabric8.istio.api.networking.v1beta1.GatewayList;
+import io.fabric8.istio.api.networking.v1beta1.GatewaySpec;
+import io.fabric8.istio.api.networking.v1beta1.GatewaySpecBuilder;
+import io.fabric8.istio.api.networking.v1beta1.HTTPMatchRequest;
+import io.fabric8.istio.api.networking.v1beta1.HTTPMatchRequestBuilder;
+import io.fabric8.istio.api.networking.v1beta1.HTTPRoute;
+import io.fabric8.istio.api.networking.v1beta1.HTTPRouteBuilder;
+import io.fabric8.istio.api.networking.v1beta1.HTTPRouteDestination;
+import io.fabric8.istio.api.networking.v1beta1.HTTPRouteDestinationBuilder;
+import io.fabric8.istio.api.networking.v1beta1.IsStringMatchMatchType;
+import io.fabric8.istio.api.networking.v1beta1.StringMatch;
+import io.fabric8.istio.api.networking.v1beta1.StringMatchBuilder;
+import io.fabric8.istio.api.networking.v1beta1.StringMatchExact;
+import io.fabric8.istio.api.networking.v1beta1.StringMatchExactBuilder;
+import io.fabric8.istio.api.networking.v1beta1.StringMatchPrefix;
+import io.fabric8.istio.api.networking.v1beta1.StringMatchPrefixBuilder;
+import io.fabric8.istio.api.networking.v1beta1.VirtualService;
+import io.fabric8.istio.api.networking.v1beta1.VirtualServiceBuilder;
+import io.fabric8.istio.api.networking.v1beta1.VirtualServiceList;
+import io.fabric8.istio.api.networking.v1beta1.VirtualServiceSpec;
+import io.fabric8.istio.api.networking.v1beta1.VirtualServiceSpecBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
@@ -38,38 +63,13 @@ import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
-import me.snowdrop.istio.api.networking.v1beta1.Destination;
-import me.snowdrop.istio.api.networking.v1beta1.DestinationBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.ExactMatchType;
-import me.snowdrop.istio.api.networking.v1beta1.ExactMatchTypeBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.Gateway;
-import me.snowdrop.istio.api.networking.v1beta1.GatewayBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.GatewayList;
-import me.snowdrop.istio.api.networking.v1beta1.GatewaySpec;
-import me.snowdrop.istio.api.networking.v1beta1.GatewaySpecBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPMatchRequest;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPMatchRequestBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPRoute;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteDestination;
-import me.snowdrop.istio.api.networking.v1beta1.HTTPRouteDestinationBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.PrefixMatchType;
-import me.snowdrop.istio.api.networking.v1beta1.PrefixMatchTypeBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.StringMatch;
-import me.snowdrop.istio.api.networking.v1beta1.StringMatch.MatchType;
-import me.snowdrop.istio.api.networking.v1beta1.StringMatchBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualService;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceBuilder;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceList;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceSpec;
-import me.snowdrop.istio.api.networking.v1beta1.VirtualServiceSpecBuilder;
 import one.util.streamex.EntryStream;
 import one.util.streamex.StreamEx;
 
 @ApplicationScoped
 public class IngressController implements ResourceEventHandler<Ingress> {
 
-	public static final String INGRESS_CLASSNAME = "IstioIngressOprator";
+	public static final String INGRESS_CLASSNAME = "istio-ingress-oprator";
 
 	@Inject
 	KubernetesClient kubernetesClient;
@@ -180,21 +180,21 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.build();
 	}
 
-	private static MatchType createMatchType(Path path) {
+	private static IsStringMatchMatchType createMatchType(Path path) {
 		if (EXACT == path.getPathType()) {
 			return createExactMatchType(path.getPath());
 		}
 		return createPrefixMatchType(path.getPath());
 	}
 
-	private static PrefixMatchType createPrefixMatchType(String path) {
-		return new PrefixMatchTypeBuilder()
+	private static StringMatchPrefix createPrefixMatchType(String path) {
+		return new StringMatchPrefixBuilder()
 			.withPrefix(path)
 			.build();
 	}
 
-	private static ExactMatchType createExactMatchType(String path) {
-		return new ExactMatchTypeBuilder()
+	private static StringMatchExact createExactMatchType(String path) {
+		return new StringMatchExactBuilder()
 			.withExact(path)
 			.build();
 	}
