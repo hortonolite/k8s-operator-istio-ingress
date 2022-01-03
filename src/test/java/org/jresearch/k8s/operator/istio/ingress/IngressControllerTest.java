@@ -25,6 +25,7 @@ import java.util.function.UnaryOperator;
 
 import javax.inject.Inject;
 
+import org.awaitility.core.ConditionTimeoutException;
 import org.hamcrest.Matcher;
 import org.jresearch.k8s.operator.istio.ingress.model.IngressAnnotation;
 import org.jresearch.k8s.operator.istio.ingress.model.PathType;
@@ -52,6 +53,10 @@ import io.fabric8.istio.api.networking.v1beta1.VirtualService;
 import io.fabric8.istio.api.networking.v1beta1.VirtualServiceList;
 import io.fabric8.istio.api.networking.v1beta1.VirtualServiceSpec;
 import io.fabric8.kubernetes.api.model.HasMetadata;
+import io.fabric8.kubernetes.api.model.LoadBalancerIngress;
+import io.fabric8.kubernetes.api.model.LoadBalancerIngressBuilder;
+import io.fabric8.kubernetes.api.model.LoadBalancerStatus;
+import io.fabric8.kubernetes.api.model.LoadBalancerStatusBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
@@ -75,6 +80,8 @@ import io.fabric8.kubernetes.api.model.networking.v1.IngressServiceBackend;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressServiceBackendBuilder;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressSpec;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressSpecBuilder;
+import io.fabric8.kubernetes.api.model.networking.v1.IngressStatus;
+import io.fabric8.kubernetes.api.model.networking.v1.IngressStatusBuilder;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressTLS;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressTLSBuilder;
 import io.fabric8.kubernetes.api.model.networking.v1.ServiceBackendPort;
@@ -104,7 +111,10 @@ class IngressControllerTest {
 
 	private static final String CUSTOM_SELECTOR = "app=istio-ingressgateway,istio=ingressgateway";
 	private static final String TEST_NAMESPACE = "test";
+	private static final String ISTIO_NAMESPACE = "istio";
 	private static final String TEST_NAME = "test-ingress-istio";
+	private static final String STATUS_IP_01 = "1.1.1.1";
+	private static final String STATUS_IP_09 = "9.9.9.9";
 
 	@SuppressWarnings("boxing")
 	private static final Matcher<Port> MATCHER_PORT_HTTP = allOf(
@@ -152,6 +162,7 @@ class IngressControllerTest {
 					assertEquals(Boolean.TRUE, client.resources(Gateway.class, GatewayList.class).inNamespace(TEST_NAMESPACE).delete());
 					assertEquals(Boolean.TRUE, v1.ingresses().inNamespace(TEST_NAMESPACE).delete());
 					assertEquals(Boolean.TRUE, client.services().inNamespace(TEST_NAMESPACE).delete());
+					assertEquals(Boolean.TRUE, client.services().inNamespace(ISTIO_NAMESPACE).delete());
 				}
 			}
 		}
@@ -168,7 +179,7 @@ class IngressControllerTest {
 		SET06("Should have correct TLS section for Ingress with HTTPS anotation false", getIngressWithRulesHttpFalse(), TLS),
 		SET07("Should have correct TLS and host sections for Ingress with HTTPS anotation true", getIngressWithRulesHttpTrue(), IngressControllerTest::checkHttp),
 		SET08("Check default selector to Istio ingress", getIngressWithIstioSelectorDefault(), gw -> checkSelector(gw, EXPECTED_DEFAULT_SELECTOR)),
-		SET09("Check custom selector to Istio ingress", getIngressWithIstioSelectorSpecified(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),;
+		SET09("Check custom selector to Istio ingress", getIngressWithIstioCustomSelector(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),;
 
 		private CreateGatevayParams(String testDescription, Ingress testIngress, Predicate<? super Gateway> testGateway) {
 			this(testDescription, testIngress, wrap(testGateway));
@@ -184,7 +195,7 @@ class IngressControllerTest {
 		private final BiPredicate<? super Ingress, ? super Gateway> testGateway;
 	}
 
-	@ParameterizedTest
+	@ParameterizedTest(name = "{0}")
 	@EnumSource
 	@DisplayName("Should create Istio GW for provided ingress")
 	void testGatewayCreate(CreateGatevayParams testData) {
@@ -201,7 +212,7 @@ class IngressControllerTest {
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Check add
-					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(ingressV1, gw));
+					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(ingressV1, gw.orElse(null)));
 				}
 			}
 		}
@@ -211,11 +222,11 @@ class IngressControllerTest {
 	@Getter
 	@AllArgsConstructor
 	private static enum UpdateGatevayParams {
-		// Untracked ingress
+		// Untracked ingress + istio -> non istio
 		UNTRACKED01("On change untracked Ingress parameters GW still the same", getIstioIngress(), IngressControllerTest::changeDescription, Object::equals),
-		// istio -> non istio
-//		SET11("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
-//		SET11("On remove ingres TLS GW should update tls list", getIstioIngressWithTwoTls(), IngressControllerTest::removeTls, IngressControllerTest::checkTwo2OneTls),
+		UNTRACKED02("On change ingressClass to istio new GW is generated", getNonIstioIngress(), IngressControllerTest::addIngressClass, IngressControllerTest::checkCreated),
+		UNTRACKED03("On change ingressClass to non istio GW is removed", getIstioIngress(), IngressControllerTest::changeIngressClass, IngressControllerTest::checkRemoved),
+		UNTRACKED04("On remove ingressClass GW is removed", getIstioIngress(), IngressControllerTest::removeIngressClass, IngressControllerTest::checkRemoved),
 		// httpOnly annotation
 		HTTP_ONLY01("On add httpOnly false annotation GW hasn't the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpFalse, IngressControllerTest::checkNo2NoHttp),
 		HTTP_ONLY02("On add httpOnly true annotation GW has the mapping for HTTP port", getIstioIngress(), IngressControllerTest::addHttpTrue, IngressControllerTest::checkNo2YesHttp),
@@ -226,8 +237,8 @@ class IngressControllerTest {
 		// istio selector annotation
 		SELECTOR01("On add istio selector annotation with default selector GW should have default selector", getIstioIngress(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkDefaul2DefaultSelector),
 		SELECTOR02("On add istio selector annotation with custom selector GW should have custom selector", getIstioIngress(), IngressControllerTest::addCustomSelector, IngressControllerTest::checkDefault2CustomSelector),
-		SELECTOR03("On change istio selector annotation GW should have updated selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkCustom2DefaultSelector),
-		SELECTOR04("On remove istio selector annotation GW should have default selector", getIngressWithIstioSelectorSpecified(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkCustom2DefaultSelector),
+		SELECTOR03("On change istio selector annotation GW should have updated selector", getIngressWithIstioCustomSelector(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkCustom2DefaultSelector),
+		SELECTOR04("On remove istio selector annotation GW should have default selector", getIngressWithIstioCustomSelector(), IngressControllerTest::removeAnnotations, IngressControllerTest::checkCustom2DefaultSelector),
 		// TLS
 		TLS01("On add new ingress TLS GW should update tls list", getIstioIngress(), IngressControllerTest::addNewTls, IngressControllerTest::checkOne2TwoTls),
 		TLS02("On change ingress TLS GW should upate existing record", getIstioIngress(), IngressControllerTest::updateTlsHost, IngressControllerTest::checkNewHostTls),
@@ -252,7 +263,7 @@ class IngressControllerTest {
 		private final ChangeBiPredicate<? super Ingress, ? super Gateway> testGateway;
 	}
 
-	@ParameterizedTest
+	@ParameterizedTest(name = "{0}")
 	@EnumSource
 	@DisplayName("Should update Istio GW on ingress update")
 	void testGatewayUpdate(UpdateGatevayParams testData) {
@@ -269,7 +280,11 @@ class IngressControllerTest {
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 					controller.onAdd(ingressV1);
 					// Check add
-					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), EXIST);
+					try {
+						await().timeout(Duration.ofSeconds(2)).until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), Optional::isPresent);
+					} catch (ConditionTimeoutException e) {
+						// May not exists - it is Ok
+					}
 					Gateway gatewayV1 = client.resources(Gateway.class, GatewayList.class).inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get();
 
 					Ingress ingressV2 = v1.ingresses().patch(ingressModificator.apply(ingressV1));
@@ -277,11 +292,87 @@ class IngressControllerTest {
 					controller.onUpdate(ingressV1, ingressV2);
 
 					// Check update
-					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(ingressV1, gatewayV1, ingressV2, gw));
+					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(ingressV1, gatewayV1, ingressV2, gw.orElse(null)));
 				}
 			}
 		}
 
+	}
+
+	@Getter
+	@AllArgsConstructor
+	@DisplayName("Should update ingress status")
+	private static enum UpdateIngressParams {
+		// Update ingress status
+		STATUS01("On change ingressClass to istio status removed if there is no Istio ingress with ExternalIP", getNonIstioIngress(), IngressControllerTest::addIngressClass, IngressControllerTest::checkNoStatus),
+		STATUS02("On change ingressClass to istio status updated if there is Istio ingress with ExternalIP", getNonIstioIngressWithIstioCustomSelector(), IngressControllerTest::addIngressClass, IngressControllerTest::checkStatus),
+		STATUS03("On change istio selector annotation status status removed if there is no Istio ingress with ExternalIP", getIngressWithIstioCustomSelector(), IngressControllerTest::addDefaultSelector, IngressControllerTest::checkNoStatus),
+		STATUS04("On change istio selector annotation status updated if there is Istio ingress with ExternalIP", getIstioIngress(), IngressControllerTest::addCustomSelector, IngressControllerTest::checkStatus),
+		STATUS05("On remove ingressClass status removed", getIstioIngress(), IngressControllerTest::removeIngressClass, IngressControllerTest::checkNoStatus),
+		;
+
+		@Override
+		public String toString() {
+			return testDescription;
+		}
+
+		private final String testDescription;
+		private final Ingress testIngress;
+		private final UnaryOperator<Ingress> ingressModificator;
+		private final Predicate<? super Ingress> test;
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@EnumSource
+	void testIngressUpdate(UpdateIngressParams testData) {
+
+		Ingress testIngressIstio = testData.getTestIngress();
+		UnaryOperator<Ingress> ingressModificator = testData.getIngressModificator();
+		Predicate<? super Ingress> testIngress = testData.getTest();
+
+		try (NamespacedKubernetesClient client = mockServer.getClient()) {
+			creteIstioIngressController(client, "istio_ingress_01", ISTIO_NAMESPACE, EXPECTED_DEFAULT_SELECTOR, "");
+			creteIstioIngressController(client, "istio_ingress_02", ISTIO_NAMESPACE, EXPECTED_CUSTOM_SELECTOR, STATUS_IP_01);
+			try (NetworkAPIGroupDSL network = client.network()) {
+				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
+					// Create and call controller
+					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
+					controller.onAdd(ingressV1);
+					// Check add
+					try {
+						await().timeout(Duration.ofSeconds(2)).until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), Optional::isPresent);
+					} catch (ConditionTimeoutException e) {
+						// May not exists - it is Ok
+					}
+
+					Ingress ingressV2 = v1.ingresses().patch(ingressModificator.apply(ingressV1));
+					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
+					controller.onUpdate(ingressV1, ingressV2);
+
+					// Check update
+					await().until(() -> getIngress(v1, TEST_NAME, TEST_NAMESPACE), ingress -> testIngress.test(ingress.orElse(null)));
+				}
+			}
+		}
+
+	}
+
+	private static void creteIstioIngressController(NamespacedKubernetesClient client, String name, String namespace, Map<String, String> labels, String ip) {
+		client.services().inNamespace(namespace).create(creteService(name, namespace, labels, ip));
+	}
+
+	private static Service creteService(String name, String namespace, Map<String, String> labels, String ip) {
+		return new ServiceBuilder()
+			.withMetadata(createMetadata(name, namespace, Map.of(), labels))
+			.withSpec(ip.isBlank() ? null : createSpec(ip))
+			.build();
+	}
+
+	private static ServiceSpec createSpec(String ip) {
+		return new ServiceSpecBuilder()
+			.withExternalIPs(ip)
+			.build();
 	}
 
 	@Getter
@@ -464,8 +555,12 @@ class IngressControllerTest {
 			.build());
 	}
 
-	private static Gateway getGateway(NamespacedKubernetesClient client, String name, String namespace) {
-		return client.resources(Gateway.class, GatewayList.class).inNamespace(namespace).withName(name).get();
+	private static Optional<Ingress> getIngress(V1NetworkAPIGroupDSL v1, String name, String namespace) {
+		return Optional.ofNullable(v1.ingresses().inNamespace(namespace).withName(name).get());
+	}
+
+	private static Optional<Gateway> getGateway(NamespacedKubernetesClient client, String name, String namespace) {
+		return Optional.ofNullable(client.resources(Gateway.class, GatewayList.class).inNamespace(namespace).withName(name).get());
 	}
 
 	private static VirtualService getVirtualService(NamespacedKubernetesClient client, String name, String namespace) {
@@ -498,70 +593,105 @@ class IngressControllerTest {
 	}
 
 	private static Ingress getIngressWithTwoRules() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createTwoRules));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createTwoRules), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithImplementationSpecificPath() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithImplementationSpecificPath));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithImplementationSpecificPath), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithPrefixPath() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithPrefixPath));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithPrefixPath), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithExactPath() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithExactPath));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithExactPath), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithNamedPort() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNamedPort));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNamedPort), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithRulesNoHttpDefault() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithRulesHttpFalse() {
-		return getIngress(Map.of(IngressAnnotation.ALLOW_HTTP.getName(), "false"), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
+		return getIngress(Map.of(IngressAnnotation.ALLOW_HTTP.getName(), "false"), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithRulesHttpTrue() {
-		return getIngress(Map.of(IngressAnnotation.ALLOW_HTTP.getName(), "true"), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
+		return getIngress(Map.of(IngressAnnotation.ALLOW_HTTP.getName(), "true"), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithIstioSelectorDefault() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
-	private static Ingress getIngressWithIstioSelectorSpecified() {
-		return getIngress(Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), CUSTOM_SELECTOR), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
+	private static Ingress getIngressWithIstioCustomSelector() {
+		return getIngress(Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), CUSTOM_SELECTOR), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
 	private static Ingress getNonIstioIngress() {
-		return getIngress(Map.of(), () -> createSpec(null, List::of, List::of));
+		return getIngress(Map.of(), () -> createSpec(null, List::of, List::of), STATUS_IP_09);
+	}
+
+	private static Ingress getNonIstioIngressWithIstioCustomSelector() {
+		return getIngress(Map.of(IngressAnnotation.ISTIO_SELECTOR.getName(), CUSTOM_SELECTOR), () -> createSpec(null, List::of, List::of), STATUS_IP_09);
 	}
 
 	private static Ingress getIstioIngress() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
 	private static Ingress getIstioIngressWithTwoTls() {
-		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTwoTls, IngressControllerTest::createRulesWithNumberPort));
+		return getIngress(Map.of(), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTwoTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
-	private static Ingress getIngress(Map<String, String> annotations, Supplier<IngressSpec> spec) {
+	private static Ingress getIngress(Map<String, String> annotations, Supplier<IngressSpec> spec, String ip) {
 		return new IngressBuilder()
 			.withMetadata(createMetadata(annotations))
 			.withSpec(spec.get())
+			.withStatus(createStatus(ip))
+			.build();
+	}
+
+	private static IngressStatus createStatus(String ip) {
+		return new IngressStatusBuilder()
+			.withLoadBalancer(createLoadBalancerStatus(List.of(ip)))
+			.build();
+	}
+
+	private static LoadBalancerStatus createLoadBalancerStatus(List<String> istioIngressIps) {
+		return new LoadBalancerStatusBuilder()
+			.withIngress(createLoadBalancerIngress(istioIngressIps))
+			.build();
+	}
+
+	@SuppressWarnings("resource")
+	private static List<LoadBalancerIngress> createLoadBalancerIngress(List<String> istioIngressIps) {
+		return StreamEx.of(istioIngressIps)
+			.map(IngressControllerTest::createLoadBalancerIngress)
+			.toList();
+	}
+
+	private static LoadBalancerIngress createLoadBalancerIngress(String istioIngressIp) {
+		return new LoadBalancerIngressBuilder()
+			.withIp(istioIngressIp)
 			.build();
 	}
 
 	private static ObjectMeta createMetadata(Map<String, String> annotations) {
+		return createMetadata(TEST_NAME, TEST_NAMESPACE, annotations, Map.of());
+	}
+
+	private static ObjectMeta createMetadata(String name, String namespace, Map<String, String> annotations, Map<String, String> labels) {
 		return new ObjectMetaBuilder()
-			.withName(TEST_NAME)
-			.withNamespace(TEST_NAMESPACE)
+			.withName(name)
+			.withNamespace(namespace)
 			.withResourceVersion("1")
 			.withAnnotations(annotations)
+			.withLabels(labels)
 			.build();
 	}
 
@@ -783,6 +913,26 @@ class IngressControllerTest {
 			.build();
 	}
 
+	private static Ingress addIngressClass(Ingress v1) {
+		return editIngressClass(v1, IngressController.INGRESS_CLASSNAME);
+	}
+
+	private static Ingress changeIngressClass(Ingress v1) {
+		return editIngressClass(v1, "non-istio");
+	}
+
+	private static Ingress removeIngressClass(Ingress v1) {
+		return editIngressClass(v1, null);
+	}
+
+	private static Ingress editIngressClass(Ingress v1, String ingressClass) {
+		return new IngressBuilder(v1)
+			.editSpec()
+			.withIngressClassName(ingressClass)
+			.endSpec()
+			.build();
+	}
+
 	private static Ingress addHttpFalse(Ingress v1) {
 		return changeAnnotations(v1, Map.of(IngressAnnotation.ALLOW_HTTP.getName(), "false"));
 	}
@@ -918,5 +1068,37 @@ class IngressControllerTest {
 	@SuppressWarnings("unchecked")
 	private static boolean checkNewBothTls(Gateway before, Gateway after) {
 		return checkTls(before, TLS_SERVER_MATCHER.apply("www.example.com", "www-example-com-tls")) && checkTls(after, TLS_SERVER_MATCHER.apply("tls.example.com", "tls-example-com-tls"));
+	}
+
+	private static boolean checkCreated(Gateway before, Gateway after) {
+		assertNull(before);
+		assertNotNull(after);
+		return true;
+	}
+
+	private static boolean checkRemoved(Gateway before, Gateway after) {
+		assertNotNull(before);
+		assertNull(after);
+		return true;
+	}
+
+	private static boolean checkNoStatus(Ingress after) {
+		return getStatusIp(after).isEmpty();
+	}
+
+	private static boolean checkStatus(Ingress after) {
+		Optional<String> statusIpAfter = getStatusIp(after);
+		return statusIpAfter.isPresent() && STATUS_IP_01.equals(statusIpAfter.get());
+	}
+
+	private static Optional<String> getStatusIp(Ingress ingress) {
+		List<LoadBalancerIngress> list = Optional.of(ingress)
+			.map(Ingress::getStatus)
+			.map(IngressStatus::getLoadBalancer)
+			.map(LoadBalancerStatus::getIngress)
+			.orElseGet(List::of);
+		return list.stream()
+			.findAny()
+			.map(LoadBalancerIngress::getIp);
 	}
 }

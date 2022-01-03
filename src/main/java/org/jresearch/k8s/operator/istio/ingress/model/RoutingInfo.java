@@ -3,14 +3,16 @@ package org.jresearch.k8s.operator.istio.ingress.model;
 import java.util.List;
 import java.util.Map;
 
+import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import lombok.Builder;
 import lombok.Builder.Default;
 import lombok.Value;
 import one.util.streamex.StreamEx;
 
 @Value
-@Builder
+@Builder(toBuilder = true)
 public class RoutingInfo {
+	Ingress ingress;
 	boolean httpsOnly;
 	String name;
 	String namespace;

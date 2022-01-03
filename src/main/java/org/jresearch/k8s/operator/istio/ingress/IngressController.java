@@ -46,17 +46,28 @@ import io.fabric8.istio.api.networking.v1beta1.VirtualServiceBuilder;
 import io.fabric8.istio.api.networking.v1beta1.VirtualServiceList;
 import io.fabric8.istio.api.networking.v1beta1.VirtualServiceSpec;
 import io.fabric8.istio.api.networking.v1beta1.VirtualServiceSpecBuilder;
+import io.fabric8.kubernetes.api.model.HasMetadata;
+import io.fabric8.kubernetes.api.model.LoadBalancerIngress;
+import io.fabric8.kubernetes.api.model.LoadBalancerIngressBuilder;
+import io.fabric8.kubernetes.api.model.LoadBalancerStatus;
+import io.fabric8.kubernetes.api.model.LoadBalancerStatusBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.ServicePort;
+import io.fabric8.kubernetes.api.model.ServiceSpec;
 import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
+import io.fabric8.kubernetes.api.model.networking.v1.IngressBuilder;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressRule;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressSpec;
+import io.fabric8.kubernetes.api.model.networking.v1.IngressStatus;
+import io.fabric8.kubernetes.api.model.networking.v1.IngressStatusBuilder;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressTLS;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.V1NetworkAPIGroupDSL;
+import io.fabric8.kubernetes.client.dsl.NetworkAPIGroupDSL;
 import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
@@ -94,22 +105,32 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		// ignore the same objects
 		if (oldInfo.equals(newInfo)) {
 			return;
+		} else if (oldInfo.isPresent() && newInfo.isEmpty()) {
+			// remove GW and VS
+			Uni.createFrom()
+				.item(oldInfo.get()
+					.toBuilder()
+					.ingress(newObj)
+					.build())
+				.emitOn(Infrastructure.getDefaultExecutor())
+				.subscribe()
+				.with(this::onDelete);
+		} else {
+			newInfo.ifPresent(info -> Uni.createFrom()
+				.item(info)
+				.emitOn(Infrastructure.getDefaultExecutor())
+				.subscribe()
+				.with(this::createOrUpdateIstioResources));
 		}
-		newInfo.ifPresent(info -> Uni.createFrom()
-			.item(info)
-			.emitOn(Infrastructure.getDefaultExecutor())
-			.subscribe()
-			.with(this::createOrUpdateIstioResources));
 	}
 
 	@Override
 	public void onDelete(Ingress obj, boolean deletedFinalStateUnknown) {
-		Uni.createFrom()
-			.item(obj)
+		getIstioRoutingInfo(obj).ifPresent(info -> Uni.createFrom()
+			.item(info)
 			.emitOn(Infrastructure.getDefaultExecutor())
 			.subscribe()
-			.with(this::onDelete);
-		Log.tracef("delete %s", getQualifiedName(obj));
+			.with(this::onDelete));
 	}
 
 	private void createOrUpdateIstioResources(RoutingInfo info) {
@@ -121,6 +142,55 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.build();
 		gatewayClient.createOrReplace(gateway);
 		createOrUpdateVirtualServices(gateway.getMetadata().getName(), info);
+		updateIngressStatus(info);
+	}
+
+	private void updateIngressStatus(RoutingInfo info) {
+		List<String> istioIngressIps = findIstioIngressIps(info);
+		Ingress updated = new IngressBuilder(info.getIngress())
+			.withStatus(createIngressStatus(istioIngressIps))
+			.build();
+		try (NetworkAPIGroupDSL network = kubernetesClient.network(); V1NetworkAPIGroupDSL v1 = network.v1()) {
+			v1.ingresses().replaceStatus(updated);
+		}
+	}
+
+	private static IngressStatus createIngressStatus(List<String> istioIngressIps) {
+		return new IngressStatusBuilder()
+			.withLoadBalancer(createLoadBalancerStatus(istioIngressIps))
+			.build();
+	}
+
+	private static LoadBalancerStatus createLoadBalancerStatus(List<String> istioIngressIps) {
+		return new LoadBalancerStatusBuilder()
+			.withIngress(createLoadBalancerIngress(istioIngressIps))
+			.build();
+	}
+
+	@SuppressWarnings("resource")
+	private static List<LoadBalancerIngress> createLoadBalancerIngress(List<String> istioIngressIps) {
+		return StreamEx.of(istioIngressIps)
+			.map(IngressController::createLoadBalancerIngress)
+			.toList();
+	}
+
+	private static LoadBalancerIngress createLoadBalancerIngress(String istioIngressIp) {
+		return new LoadBalancerIngressBuilder()
+			.withIp(istioIngressIp)
+			.build();
+	}
+
+	private List<String> findIstioIngressIps(RoutingInfo info) {
+		Map<String, String> istioSelector = info.getIstioSelector();
+		return kubernetesClient.services()
+			.inAnyNamespace()
+			.withLabels(istioSelector)
+			.list()
+			.getItems().stream()
+			.findAny()
+			.map(Service::getSpec)
+			.map(ServiceSpec::getExternalIPs)
+			.orElseGet(List::of);
 	}
 
 	@SuppressWarnings("resource")
@@ -251,6 +321,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		return info.isHttpsOnly() ? createSpecHttpsOnly(istioSelector, tls) : createSpecWithHttp(istioSelector, tls, info);
 	}
 
+	@SuppressWarnings("boxing")
 	private GatewaySpec createSpecWithHttp(Map<String, String> istioSelector, List<Tls> tls, RoutingInfo info) {
 		return new GatewaySpecBuilder()
 			.withSelector(istioSelector)
@@ -286,9 +357,35 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.build();
 	}
 
-	private void onDelete(Ingress ingress) {
-		Log.tracef("on delete %s", getQualifiedName(ingress));
-		// should be done automatically
+	@SuppressWarnings("resource")
+	private void onDelete(RoutingInfo info) {
+		Log.tracef("on delete %s", info);
+		// remove GW
+		NonNamespaceOperation<Gateway, GatewayList, Resource<Gateway>> gatewayClient = kubernetesClient.resources(Gateway.class, GatewayList.class).inNamespace(info.getNamespace());
+		StreamEx.of(gatewayClient.list().getItems()).filter(gw -> isOwned(gw, info.getOwnerInfo().getUid())).findAny().ifPresent(gatewayClient::delete);
+
+		// remove VS
+		NonNamespaceOperation<VirtualService, VirtualServiceList, Resource<VirtualService>> virtualServiceClient = kubernetesClient.resources(VirtualService.class, VirtualServiceList.class).inNamespace(info.getNamespace());
+		StreamEx.of(virtualServiceClient.list().getItems()).filter(vs -> isOwned(vs, info.getOwnerInfo().getUid())).findAny().ifPresent(virtualServiceClient::delete);
+
+		// remove Ingress status
+		boolean needUpdate = Optional.of(info)
+			.map(RoutingInfo::getIngress)
+			.map(Ingress::getStatus)
+			.map(IngressStatus::getLoadBalancer)
+			.isPresent();
+		if (needUpdate) {
+			Ingress updated = new IngressBuilder(info.getIngress())
+				.editStatus()
+				.withLoadBalancer(null)
+				.endStatus()
+				.build();
+			kubernetesClient.network().v1().ingresses().replaceStatus(updated);
+		}
+	}
+
+	private static boolean isOwned(HasMetadata object, String uid) {
+		return object.getOwnerReferenceFor(uid).isPresent();
 	}
 
 	@SuppressWarnings("resource")
@@ -321,6 +418,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.toMap(s -> s[0], s -> s[1]);
 
 		return Optional.of(RoutingInfo.builder()
+			.ingress(ingress)
 			.name(ingress.getMetadata().getName())
 			.namespace(ingress.getMetadata().getNamespace())
 			.ownerInfo(istioMapper.map(ingress))
