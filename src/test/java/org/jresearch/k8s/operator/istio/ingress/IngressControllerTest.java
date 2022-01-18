@@ -27,6 +27,7 @@ import javax.inject.Inject;
 
 import org.awaitility.core.ConditionTimeoutException;
 import org.hamcrest.Matcher;
+import org.jresearch.k8s.operator.istio.ingress.model.CertManagerIngressAnnotation;
 import org.jresearch.k8s.operator.istio.ingress.model.IngressAnnotation;
 import org.jresearch.k8s.operator.istio.ingress.model.PathType;
 import org.junit.jupiter.api.AfterEach;
@@ -109,8 +110,9 @@ class IngressControllerTest {
 	@Inject
 	IngressController controller;
 
+	private static final String CLUSTER_ISSUER_PROD = "cluster-issuer-prod";
 	private static final String CUSTOM_SELECTOR = "app=istio-ingressgateway,istio=ingressgateway";
-	private static final String TEST_NAMESPACE = "test";
+	private static final String TEST_NAMESPACE = "test-namespace";
 	private static final String ISTIO_NAMESPACE = "istio";
 	private static final String TEST_NAME = "test-ingress-istio";
 	private static final String STATUS_IP_01 = "1.1.1.1";
@@ -146,7 +148,6 @@ class IngressControllerTest {
 	private static final BiPredicate<HasMetadata, HasMetadata> OWNER = IngressControllerTest::checkOwner;
 	private static final Predicate<HasMetadata> NAMESPACE = IngressControllerTest::checkNamespace;
 	private static final Predicate<Gateway> TLS = IngressControllerTest::checkTlsOnly;
-	private static final Predicate<Gateway> HTTP = IngressControllerTest::checkHttp;
 	private static final Predicate<VirtualService> GW_NAME = IngressControllerTest::checkGwName;
 
 	private static <I, W> BiPredicate<I, W> wrap(Predicate<? super W> resourcePredicate) {
@@ -170,7 +171,7 @@ class IngressControllerTest {
 
 	@Getter
 	@AllArgsConstructor
-	private static enum CreateGatevayParams {
+	private static enum CreateGatewayParams {
 		SET01("Should create the GW with desired name", getIstioIngress(), EXIST),
 		SET02("Should have correct owner record pointed to test ingress", getIstioIngress(), OWNER),
 		SET03("Should have the same NS as ingress", getIstioIngress(), NAMESPACE),
@@ -179,9 +180,11 @@ class IngressControllerTest {
 		SET06("Should have correct TLS section for Ingress with HTTPS anotation false", getIngressWithRulesHttpFalse(), TLS),
 		SET07("Should have correct TLS and host sections for Ingress with HTTPS anotation true", getIngressWithRulesHttpTrue(), IngressControllerTest::checkHttp),
 		SET08("Check default selector to Istio ingress", getIngressWithIstioSelectorDefault(), gw -> checkSelector(gw, EXPECTED_DEFAULT_SELECTOR)),
-		SET09("Check custom selector to Istio ingress", getIngressWithIstioCustomSelector(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),;
+		SET09("Check custom selector to Istio ingress", getIngressWithIstioCustomSelector(), gw -> checkSelector(gw, EXPECTED_CUSTOM_SELECTOR)),
+		// Cert manager support
+		CERT_MANAGER01("Should transfer the JRS cert. manager annotations to the gateway", getIstioIngressWithCertManagerIssuerAnnotation(), IngressControllerTest::checkCertManagerIssuer);
 
-		private CreateGatevayParams(String testDescription, Ingress testIngress, Predicate<? super Gateway> testGateway) {
+		private CreateGatewayParams(String testDescription, Ingress testIngress, Predicate<? super Gateway> testGateway) {
 			this(testDescription, testIngress, wrap(testGateway));
 		}
 
@@ -198,7 +201,7 @@ class IngressControllerTest {
 	@ParameterizedTest(name = "{0}")
 	@EnumSource
 	@DisplayName("Should create Istio GW for provided ingress")
-	void testGatewayCreate(CreateGatevayParams testData) {
+	void testGatewayCreate(CreateGatewayParams testData) {
 
 		Ingress testIngressIstio = testData.getTestIngress();
 		BiPredicate<? super Ingress, ? super Gateway> testGateway = testData.getTestGateway();
@@ -207,7 +210,7 @@ class IngressControllerTest {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
 					controller.onAdd(ingressV1);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
@@ -221,7 +224,7 @@ class IngressControllerTest {
 
 	@Getter
 	@AllArgsConstructor
-	private static enum UpdateGatevayParams {
+	private static enum UpdateGatewayParams {
 		// Untracked ingress + istio -> non istio
 		UNTRACKED01("On change untracked Ingress parameters GW still the same", getIstioIngress(), IngressControllerTest::changeDescription, Object::equals),
 		UNTRACKED02("On change ingressClass to istio new GW is generated", getNonIstioIngress(), IngressControllerTest::addIngressClass, IngressControllerTest::checkCreated),
@@ -248,7 +251,7 @@ class IngressControllerTest {
 
 		;
 
-		private UpdateGatevayParams(String testDescription, Ingress testIngress, UnaryOperator<Ingress> ingressModificator, ChangePredicate<? super Gateway> testGateway) {
+		private UpdateGatewayParams(String testDescription, Ingress testIngress, UnaryOperator<Ingress> ingressModificator, ChangePredicate<? super Gateway> testGateway) {
 			this(testDescription, testIngress, ingressModificator, ChangeBiPredicate.wrap(testGateway));
 		}
 
@@ -266,7 +269,7 @@ class IngressControllerTest {
 	@ParameterizedTest(name = "{0}")
 	@EnumSource
 	@DisplayName("Should update Istio GW on ingress update")
-	void testGatewayUpdate(UpdateGatevayParams testData) {
+	void testGatewayUpdate(UpdateGatewayParams testData) {
 
 		Ingress testIngressIstio = testData.getTestIngress();
 		UnaryOperator<Ingress> ingressModificator = testData.getIngressModificator();
@@ -276,7 +279,7 @@ class IngressControllerTest {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 					controller.onAdd(ingressV1);
 					// Check add
@@ -287,7 +290,7 @@ class IngressControllerTest {
 					}
 					Gateway gatewayV1 = client.resources(Gateway.class, GatewayList.class).inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get();
 
-					Ingress ingressV2 = v1.ingresses().patch(ingressModificator.apply(ingressV1));
+					Ingress ingressV2 = v1.ingresses().inNamespace(TEST_NAMESPACE).patch(ingressModificator.apply(ingressV1));
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 					controller.onUpdate(ingressV1, ingressV2);
 
@@ -336,7 +339,7 @@ class IngressControllerTest {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 					controller.onAdd(ingressV1);
 					// Check add
@@ -346,7 +349,7 @@ class IngressControllerTest {
 						// May not exists - it is Ok
 					}
 
-					Ingress ingressV2 = v1.ingresses().patch(ingressModificator.apply(ingressV1));
+					Ingress ingressV2 = v1.ingresses().inNamespace(TEST_NAMESPACE).patch(ingressModificator.apply(ingressV1));
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 					controller.onUpdate(ingressV1, ingressV2);
 
@@ -420,7 +423,7 @@ class IngressControllerTest {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
 					controller.onAdd(ingressV1);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
@@ -474,11 +477,11 @@ class IngressControllerTest {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create service
 					if (testService != null) {
-						client.services().create(testService);
+						client.services().inNamespace(TEST_NAMESPACE).create(testService);
 						assertNotNull(client.services().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 					}
 					// Create and call controller
-					Ingress ingressV1 = v1.ingresses().create(testIngressIstio);
+					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
 					controller.onAdd(ingressV1);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
@@ -501,7 +504,7 @@ class IngressControllerTest {
 			try (NetworkAPIGroupDSL network = client.network()) {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
-					Ingress ingress = v1.ingresses().create(testIngressGeneral);
+					Ingress ingress = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressGeneral);
 					controller.onAdd(ingress);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
@@ -590,6 +593,10 @@ class IngressControllerTest {
 			.map(s -> s.getGateways())
 			.orElseGet(List::of)
 			.contains(TEST_NAME);
+	}
+
+	private static Ingress getIstioIngressWithCertManagerIssuerAnnotation() {
+		return getIngress(Map.of(CertManagerIngressAnnotation.CLUSTER_ISSUER.getName(), CLUSTER_ISSUER_PROD), () -> createSpec(IngressController.INGRESS_CLASSNAME, IngressControllerTest::createTls, IngressControllerTest::createRulesWithNumberPort), STATUS_IP_09);
 	}
 
 	private static Ingress getIngressWithTwoRules() {
@@ -808,6 +815,13 @@ class IngressControllerTest {
 		return new ServiceBackendPortBuilder()
 			.withName("http")
 			.build();
+	}
+
+	private static boolean checkCertManagerIssuer(Gateway toCheck) {
+		Map<String, String> annotations = KubernetesResourceUtil.getOrCreateAnnotations(toCheck);
+		String value = annotations.get(CertManagerIngressAnnotation.CLUSTER_ISSUER.getCertManagerName());
+
+		return CLUSTER_ISSUER_PROD.equals(value);
 	}
 
 	private static boolean checkHttp(Gateway toCheck) {

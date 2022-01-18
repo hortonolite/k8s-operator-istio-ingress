@@ -6,12 +6,14 @@ import java.util.Map;
 import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import lombok.Builder;
 import lombok.Builder.Default;
+import lombok.ToString.Exclude;
 import lombok.Value;
 import one.util.streamex.StreamEx;
 
 @Value
 @Builder(toBuilder = true)
 public class RoutingInfo {
+	@Exclude
 	Ingress ingress;
 	boolean httpsOnly;
 	String name;
@@ -19,6 +21,8 @@ public class RoutingInfo {
 	OwnerInfo ownerInfo;
 	@Default
 	Map<String, String> istioSelector = Map.of();
+	@Default
+	Map<String, String> certManagerAnnotations = Map.of();
 	@Default
 	List<Tls> tls = List.of();
 	@Default

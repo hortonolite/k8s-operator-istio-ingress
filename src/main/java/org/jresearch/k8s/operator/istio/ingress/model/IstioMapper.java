@@ -17,7 +17,7 @@ import io.fabric8.istio.api.networking.v1beta1.ServerTLSSettingsTLSmode;
 import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import io.fabric8.kubernetes.api.model.networking.v1.IngressTLS;
 
-@Mapper(componentModel = CDI, unmappedSourcePolicy = WARN, unmappedTargetPolicy = ERROR)
+@Mapper(componentModel = CDI, unmappedSourcePolicy = ERROR, unmappedTargetPolicy = ERROR)
 public interface IstioMapper {
 
 	@SuppressWarnings("boxing")
@@ -42,7 +42,7 @@ public interface IstioMapper {
 	@Mapping(target = "defaultEndpoint", ignore = true)
 	@Mapping(target = "name", ignore = true)
 	@Mapping(target = "additionalProperties", ignore = true)
-	@BeanMapping(ignoreUnmappedSourceProperties = { "istioSelector", "name", "namespace", "rules", "tls", "ownerInfo", "httpsOnly" })
+	@BeanMapping(ignoreUnmappedSourceProperties = { "istioSelector", "name", "namespace", "rules", "tls", "ownerInfo", "httpsOnly", "ingress", "certManagerAnnotations" })
 	Server mapHttp(RoutingInfo info);
 
 	default ServerTLSSettings mapSecretName(String secretName) {
@@ -68,7 +68,7 @@ public interface IstioMapper {
 
 	@Mapping(target = "name", source = "metadata.name")
 	@Mapping(target = "uid", source = "metadata.uid")
-	@BeanMapping(ignoreUnmappedSourceProperties = { "fullResourceName", "plural", "singular", "markedForDeletion", "additionalProperties", "spec", "status" })
+	@BeanMapping(ignoreUnmappedSourceProperties = { "fullResourceName", "plural", "singular", "markedForDeletion", "additionalProperties", "spec", "status", "finalizers" })
 	OwnerInfo map(Ingress ingress);
 
 }

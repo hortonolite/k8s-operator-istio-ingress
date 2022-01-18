@@ -3,6 +3,7 @@ package org.jresearch.k8s.operator.istio.ingress;
 import static io.fabric8.kubernetes.client.utils.KubernetesResourceUtil.*;
 import static org.jresearch.k8s.operator.istio.ingress.model.PathType.*;
 
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -11,6 +12,8 @@ import java.util.OptionalInt;
 import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
 
+import org.graalvm.collections.Pair;
+import org.jresearch.k8s.operator.istio.ingress.model.CertManagerIngressAnnotation;
 import org.jresearch.k8s.operator.istio.ingress.model.IngressAnnotation;
 import org.jresearch.k8s.operator.istio.ingress.model.IstioMapper;
 import org.jresearch.k8s.operator.istio.ingress.model.OperatorMapper;
@@ -80,7 +83,7 @@ import one.util.streamex.StreamEx;
 @ApplicationScoped
 public class IngressController implements ResourceEventHandler<Ingress> {
 
-	public static final String INGRESS_CLASSNAME = "istio-ingress-oprator";
+	public static final String INGRESS_CLASSNAME = "istio-ingress-operator";
 
 	@Inject
 	KubernetesClient kubernetesClient;
@@ -91,6 +94,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 
 	@Override
 	public void onAdd(Ingress obj) {
+		Log.tracef("onAdd. Ingress: %s", getQualifiedName(obj));
 		getIstioRoutingInfo(obj).ifPresent(info -> Uni.createFrom()
 			.item(info)
 			.emitOn(Infrastructure.getDefaultExecutor())
@@ -100,11 +104,12 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 
 	@Override
 	public void onUpdate(Ingress oldObj, Ingress newObj) {
+		Log.tracef("onUpdate. Ingress old: %s, Ingress new: %s", getQualifiedName(oldObj), getQualifiedName(newObj));
 		Optional<RoutingInfo> oldInfo = getIstioRoutingInfo(oldObj);
 		Optional<RoutingInfo> newInfo = getIstioRoutingInfo(newObj);
 		// ignore the same objects
 		if (oldInfo.equals(newInfo)) {
-			return;
+			// do nothing
 		} else if (oldInfo.isPresent() && newInfo.isEmpty()) {
 			// remove GW and VS
 			Uni.createFrom()
@@ -124,8 +129,10 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 		}
 	}
 
+	@SuppressWarnings("boxing")
 	@Override
 	public void onDelete(Ingress obj, boolean deletedFinalStateUnknown) {
+		Log.tracef("onDelete. Ingress: %s, deletedFinalStateUnknown: %s", getQualifiedName(obj), deletedFinalStateUnknown);
 		getIstioRoutingInfo(obj).ifPresent(info -> Uni.createFrom()
 			.item(info)
 			.emitOn(Infrastructure.getDefaultExecutor())
@@ -134,10 +141,10 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 	}
 
 	private void createOrUpdateIstioResources(RoutingInfo info) {
-		Log.infof("Create/update istio gateway for: %s", info);
+		Log.debugf("Create/update istio gateway for: %s", info);
 		NonNamespaceOperation<Gateway, GatewayList, Resource<Gateway>> gatewayClient = kubernetesClient.resources(Gateway.class, GatewayList.class).inNamespace(info.getNamespace());
 		Gateway gateway = new GatewayBuilder()
-			.withMetadata(createMetadata(info.getName(), info.getNamespace(), info.getOwnerInfo()))
+			.withMetadata(createMetadata(info.getName(), info.getNamespace(), info.getCertManagerAnnotations(), info.getOwnerInfo()))
 			.withSpec(createGatewaySpec(info))
 			.build();
 		gatewayClient.createOrReplace(gateway);
@@ -147,11 +154,13 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 
 	private void updateIngressStatus(RoutingInfo info) {
 		List<String> istioIngressIps = findIstioIngressIps(info);
+		IngressStatus status = createIngressStatus(istioIngressIps);
 		Ingress updated = new IngressBuilder(info.getIngress())
-			.withStatus(createIngressStatus(istioIngressIps))
+			.withStatus(status)
 			.build();
 		try (NetworkAPIGroupDSL network = kubernetesClient.network(); V1NetworkAPIGroupDSL v1 = network.v1()) {
-			v1.ingresses().replaceStatus(updated);
+			Log.debugf("Update ingres status (%s) for %s", status, info);
+			v1.ingresses().inNamespace(info.getNamespace()).replaceStatus(updated);
 		}
 	}
 
@@ -201,10 +210,10 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 
 	@SuppressWarnings("boxing")
 	private void createOrUpdateVirtualService(NonNamespaceOperation<VirtualService, VirtualServiceList, Resource<VirtualService>> virtualServiceClient, Integer index, Rule rule, String gatewayName, RoutingInfo info) {
-		Log.infof("Create/update istio virtual service %s for: %s", index, info);
+		Log.debugf("Create/update istio virtual service %s for: %s", index, info);
 		String virtualServiceName = genarateVirtualServiceName(info.getName(), index);
 		VirtualService virtualService = new VirtualServiceBuilder()
-			.withMetadata(createMetadata(virtualServiceName, info.getNamespace(), info.getOwnerInfo()))
+			.withMetadata(createMetadata(virtualServiceName, info.getNamespace(), Map.of(), info.getOwnerInfo()))
 			.withSpec(createVirtualServiceSpec(gatewayName, info.getNamespace(), rule))
 			.build();
 		virtualServiceClient.createOrReplace(virtualService);
@@ -337,10 +346,11 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.build();
 	}
 
-	private static ObjectMeta createMetadata(String name, String namespace, OwnerInfo ownerInfo) {
+	private static ObjectMeta createMetadata(String name, String namespace, Map<String, String> annotations, OwnerInfo ownerInfo) {
 		return new ObjectMetaBuilder()
 			.withName(name)
 			.withNamespace(namespace)
+			.withAnnotations(annotations)
 			.withOwnerReferences(createOwnerReferences(ownerInfo))
 			.build();
 	}
@@ -380,7 +390,7 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 				.withLoadBalancer(null)
 				.endStatus()
 				.build();
-			kubernetesClient.network().v1().ingresses().replaceStatus(updated);
+			kubernetesClient.network().v1().ingresses().inNamespace(info.getNamespace()).replaceStatus(updated);
 		}
 	}
 
@@ -417,12 +427,21 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 			.map(s -> s.split("=", 2))
 			.toMap(s -> s[0], s -> s[1]);
 
+		// Process cert-manager.io annotations
+		Map<String, String> certManagerAnnotations = StreamEx.of(EnumSet.allOf(CertManagerIngressAnnotation.class))
+			.map(a -> a.getValue(ingress))
+			.remove(Optional::isEmpty)
+			.map(Optional::get)
+			.mapToEntry(Pair::getLeft, Pair::getRight)
+			.toMap();
+
 		return Optional.of(RoutingInfo.builder()
 			.ingress(ingress)
 			.name(ingress.getMetadata().getName())
 			.namespace(ingress.getMetadata().getNamespace())
 			.ownerInfo(istioMapper.map(ingress))
 			.istioSelector(istioSelector)
+			.certManagerAnnotations(certManagerAnnotations)
 			.tls(tls)
 			.httpsOnly(!allowHttpValue)
 			.rules(rules)
