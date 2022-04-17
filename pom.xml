@@ -18,11 +18,11 @@
 		<!-- sonar w/o tests -->
 		<sonar.tests/>
 		<!-- ⬇️⬇️⬇️Dependencies version properties⬇️⬇️⬇️ -->
-		<quarkus.platform.version>2.6.1.Final</quarkus.platform.version>
-		<quarkus-operator-sdk.version>2.0.2</quarkus-operator-sdk.version>
-		<operator-framework-core.version>1.10.1</operator-framework-core.version>
-		<kubernetes-client.version>5.11.2</kubernetes-client.version>
-		<mapstruct.version>1.5.0.Beta2</mapstruct.version>
+		<quarkus.platform.version>2.7.5.Final</quarkus.platform.version>
+		<quarkus-operator-sdk.version>3.0.7</quarkus-operator-sdk.version>
+		<operator-framework-core.version>2.1.4</operator-framework-core.version>
+		<kubernetes-client.version>5.12.2</kubernetes-client.version>
+		<mapstruct.version>1.5.0.RC1</mapstruct.version>
 		<truth.version>1.1.3</truth.version>
 		<streamex.version>0.8.1</streamex.version>
 	</properties>
@@ -44,8 +44,10 @@
 			</dependency>
 			<dependency>
 				<groupId>io.quarkiverse.operatorsdk</groupId>
-				<artifactId>quarkus-operator-sdk</artifactId>
+				<artifactId>quarkus-operator-sdk-bom</artifactId>
 				<version>${quarkus-operator-sdk.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
 			</dependency>
 			<dependency>
 				<groupId>io.javaoperatorsdk</groupId>
@@ -173,6 +175,11 @@
 		<!-- quarkus build -->
 		<dependency>
 			<groupId>io.quarkiverse.operatorsdk</groupId>
+			<artifactId>quarkus-operator-sdk-deployment</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.quarkiverse.operatorsdk</groupId>
 			<artifactId>quarkus-operator-sdk</artifactId>
 		</dependency>
 		<dependency>
@@ -221,9 +228,6 @@
 					<ignoredUnusedDeclaredDependencies>
 						<ignoredUnusedDeclaredDependency>io.quarkus</ignoredUnusedDeclaredDependency>
 						<ignoredUnusedDeclaredDependency>io.quarkiverse.operatorsdk:quarkus-operator-sdk</ignoredUnusedDeclaredDependency>
-						<!-- <ignoredUnusedDeclaredDependency>io.fabric8:kubernetes-model-core:jar</ignoredUnusedDeclaredDependency>
-						<ignoredUnusedDeclaredDependency>io.fabric8:kubernetes-client:jar</ignoredUnusedDeclaredDependency>
-						<ignoredUnusedDeclaredDependency>io.fabric8:kubernetes-model-networking:jar</ignoredUnusedDeclaredDependency> -->
 					</ignoredUnusedDeclaredDependencies>
 				</configuration>
 			</plugin>

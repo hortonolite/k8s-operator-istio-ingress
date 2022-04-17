@@ -8,9 +8,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.TimeUnit;
 
-import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
+import javax.inject.Singleton;
 
 import org.graalvm.collections.Pair;
 import org.jresearch.k8s.operator.istio.ingress.model.CertManagerIngressAnnotation;
@@ -73,15 +74,21 @@ import io.fabric8.kubernetes.client.V1NetworkAPIGroupDSL;
 import io.fabric8.kubernetes.client.dsl.NetworkAPIGroupDSL;
 import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.Resource;
-import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
+import io.javaoperatorsdk.operator.api.reconciler.Context;
+import io.javaoperatorsdk.operator.api.reconciler.ControllerConfiguration;
+import io.javaoperatorsdk.operator.api.reconciler.DeleteControl;
+import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
+import io.javaoperatorsdk.operator.api.reconciler.ReconciliationMaxInterval;
+import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
 import one.util.streamex.EntryStream;
 import one.util.streamex.StreamEx;
 
-@ApplicationScoped
-public class IngressController implements ResourceEventHandler<Ingress> {
+@Singleton
+@ControllerConfiguration(reconciliationMaxInterval = @ReconciliationMaxInterval(interval = 30, timeUnit = TimeUnit.SECONDS))
+public class IngressController implements Reconciler<Ingress> {
 
 	public static final String INGRESS_CLASSNAME = "istio-ingress-operator";
 
@@ -93,30 +100,13 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 	OperatorMapper operatorMapper;
 
 	@Override
-	public void onAdd(Ingress obj) {
-		Log.tracef("onAdd. Ingress: %s", getQualifiedName(obj));
-		getIstioRoutingInfo(obj).ifPresent(info -> Uni.createFrom()
-			.item(info)
-			.emitOn(Infrastructure.getDefaultExecutor())
-			.subscribe()
-			.with(this::createOrUpdateIstioResources));
-	}
-
-	@Override
-	public void onUpdate(Ingress oldObj, Ingress newObj) {
-		Log.tracef("onUpdate. Ingress old: %s, Ingress new: %s", getQualifiedName(oldObj), getQualifiedName(newObj));
-		Optional<RoutingInfo> oldInfo = getIstioRoutingInfo(oldObj);
-		Optional<RoutingInfo> newInfo = getIstioRoutingInfo(newObj);
-		// ignore the same objects
-		if (oldInfo.equals(newInfo)) {
-			// do nothing
-		} else if (oldInfo.isPresent() && newInfo.isEmpty()) {
-			// remove GW and VS
+	public UpdateControl<Ingress> reconcile(Ingress obj, Context context) {
+		Log.tracef("reconcile. Ingress: %s", getQualifiedName(obj));
+		Optional<RoutingInfo> newInfo = getIstioRoutingInfo(obj);
+		if (newInfo.isEmpty()) {
+			// remove GW and VS if any
 			Uni.createFrom()
-				.item(oldInfo.get()
-					.toBuilder()
-					.ingress(newObj)
-					.build())
+				.item(obj)
 				.emitOn(Infrastructure.getDefaultExecutor())
 				.subscribe()
 				.with(this::onDelete);
@@ -127,17 +117,18 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 				.subscribe()
 				.with(this::createOrUpdateIstioResources));
 		}
+		return UpdateControl.noUpdate();
 	}
 
-	@SuppressWarnings("boxing")
 	@Override
-	public void onDelete(Ingress obj, boolean deletedFinalStateUnknown) {
-		Log.tracef("onDelete. Ingress: %s, deletedFinalStateUnknown: %s", getQualifiedName(obj), deletedFinalStateUnknown);
-		getIstioRoutingInfo(obj).ifPresent(info -> Uni.createFrom()
-			.item(info)
+	public DeleteControl cleanup(Ingress obj, Context context) {
+		Log.tracef("onDelete. Ingress: %s, context: %s", getQualifiedName(obj), context);
+		Uni.createFrom()
+			.item(obj)
 			.emitOn(Infrastructure.getDefaultExecutor())
 			.subscribe()
-			.with(this::onDelete));
+			.with(this::onDelete);
+		return DeleteControl.defaultDelete();
 	}
 
 	private void createOrUpdateIstioResources(RoutingInfo info) {
@@ -368,34 +359,36 @@ public class IngressController implements ResourceEventHandler<Ingress> {
 	}
 
 	@SuppressWarnings("resource")
-	private void onDelete(RoutingInfo info) {
-		Log.tracef("on delete %s", info);
-		// remove GW
-		NonNamespaceOperation<Gateway, GatewayList, Resource<Gateway>> gatewayClient = kubernetesClient.resources(Gateway.class, GatewayList.class).inNamespace(info.getNamespace());
-		StreamEx.of(gatewayClient.list().getItems()).filter(gw -> isOwned(gw, info.getOwnerInfo().getUid())).findAny().ifPresent(gatewayClient::delete);
+	private void onDelete(Ingress ingress) {
+		Log.tracef("on delete %s", getQualifiedName(ingress));
+		String namespace = ingress.optionalMetadata().map(ObjectMeta::getNamespace).orElse(null);
+		if (namespace != null) {
+			// remove GW
+			NonNamespaceOperation<Gateway, GatewayList, Resource<Gateway>> gatewayClient = kubernetesClient.resources(Gateway.class, GatewayList.class).inNamespace(namespace);
+			StreamEx.of(gatewayClient.list().getItems()).filter(gw -> isOwned(gw, ingress)).findAny().ifPresent(gatewayClient::delete);
 
-		// remove VS
-		NonNamespaceOperation<VirtualService, VirtualServiceList, Resource<VirtualService>> virtualServiceClient = kubernetesClient.resources(VirtualService.class, VirtualServiceList.class).inNamespace(info.getNamespace());
-		StreamEx.of(virtualServiceClient.list().getItems()).filter(vs -> isOwned(vs, info.getOwnerInfo().getUid())).findAny().ifPresent(virtualServiceClient::delete);
+			// remove VS
+			NonNamespaceOperation<VirtualService, VirtualServiceList, Resource<VirtualService>> virtualServiceClient = kubernetesClient.resources(VirtualService.class, VirtualServiceList.class).inNamespace(namespace);
+			StreamEx.of(virtualServiceClient.list().getItems()).filter(vs -> isOwned(vs, ingress)).findAny().ifPresent(virtualServiceClient::delete);
 
-		// remove Ingress status
-		boolean needUpdate = Optional.of(info)
-			.map(RoutingInfo::getIngress)
-			.map(Ingress::getStatus)
-			.map(IngressStatus::getLoadBalancer)
-			.isPresent();
-		if (needUpdate) {
-			Ingress updated = new IngressBuilder(info.getIngress())
-				.editStatus()
-				.withLoadBalancer(null)
-				.endStatus()
-				.build();
-			kubernetesClient.network().v1().ingresses().inNamespace(info.getNamespace()).replaceStatus(updated);
+			// remove Ingress status
+			boolean needUpdate = Optional.of(ingress)
+				.map(Ingress::getStatus)
+				.map(IngressStatus::getLoadBalancer)
+				.isPresent();
+			if (needUpdate) {
+				Ingress updated = new IngressBuilder(ingress)
+					.editStatus()
+					.withLoadBalancer(null)
+					.endStatus()
+					.build();
+				kubernetesClient.network().v1().ingresses().inNamespace(namespace).replaceStatus(updated);
+			}
 		}
 	}
 
-	private static boolean isOwned(HasMetadata object, String uid) {
-		return object.getOwnerReferenceFor(uid).isPresent();
+	private static boolean isOwned(HasMetadata object, HasMetadata owner) {
+		return object.getOwnerReferenceFor(owner).isPresent();
 	}
 
 	@SuppressWarnings("resource")

@@ -211,7 +211,7 @@ class IngressControllerTest {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
 					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
-					controller.onAdd(ingressV1);
+					controller.reconcile(ingressV1, null);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Check add
@@ -281,7 +281,7 @@ class IngressControllerTest {
 					// Create and call controller
 					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
-					controller.onAdd(ingressV1);
+					controller.reconcile(ingressV1, null);
 					// Check add
 					try {
 						await().timeout(Duration.ofSeconds(2)).until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), Optional::isPresent);
@@ -290,9 +290,9 @@ class IngressControllerTest {
 					}
 					Gateway gatewayV1 = client.resources(Gateway.class, GatewayList.class).inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get();
 
-					Ingress ingressV2 = v1.ingresses().inNamespace(TEST_NAMESPACE).patch(ingressModificator.apply(ingressV1));
+					Ingress ingressV2 = v1.ingresses().inNamespace(TEST_NAMESPACE).replace(ingressModificator.apply(ingressV1));
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
-					controller.onUpdate(ingressV1, ingressV2);
+					controller.reconcile(ingressV2, null);
 
 					// Check update
 					await().until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), gw -> testGateway.test(ingressV1, gatewayV1, ingressV2, gw.orElse(null)));
@@ -341,7 +341,7 @@ class IngressControllerTest {
 					// Create and call controller
 					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
-					controller.onAdd(ingressV1);
+					controller.reconcile(ingressV1, null);
 					// Check add
 					try {
 						await().timeout(Duration.ofSeconds(2)).until(() -> getGateway(client, TEST_NAME, TEST_NAMESPACE), Optional::isPresent);
@@ -349,9 +349,9 @@ class IngressControllerTest {
 						// May not exists - it is Ok
 					}
 
-					Ingress ingressV2 = v1.ingresses().inNamespace(TEST_NAMESPACE).patch(ingressModificator.apply(ingressV1));
+					Ingress ingressV2 = v1.ingresses().inNamespace(TEST_NAMESPACE).replace(ingressModificator.apply(ingressV1));
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
-					controller.onUpdate(ingressV1, ingressV2);
+					controller.reconcile(ingressV2, null);
 
 					// Check update
 					await().until(() -> getIngress(v1, TEST_NAME, TEST_NAMESPACE), ingress -> testIngress.test(ingress.orElse(null)));
@@ -424,7 +424,7 @@ class IngressControllerTest {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
 					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
-					controller.onAdd(ingressV1);
+					controller.reconcile(ingressV1, null);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Check add
@@ -482,7 +482,7 @@ class IngressControllerTest {
 					}
 					// Create and call controller
 					Ingress ingressV1 = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressIstio);
-					controller.onAdd(ingressV1);
+					controller.reconcile(ingressV1, null);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Check add
@@ -505,7 +505,7 @@ class IngressControllerTest {
 				try (V1NetworkAPIGroupDSL v1 = network.v1()) {
 					// Create and call controller
 					Ingress ingress = v1.ingresses().inNamespace(TEST_NAMESPACE).create(testIngressGeneral);
-					controller.onAdd(ingress);
+					controller.reconcile(ingress, null);
 					assertNotNull(v1.ingresses().inNamespace(TEST_NAMESPACE).withName(TEST_NAME).get());
 
 					// Chek ignore general
