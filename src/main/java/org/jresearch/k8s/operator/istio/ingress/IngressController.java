@@ -76,7 +76,6 @@ import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.ControllerConfiguration;
-import io.javaoperatorsdk.operator.api.reconciler.DeleteControl;
 import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import io.javaoperatorsdk.operator.api.reconciler.ReconciliationMaxInterval;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
@@ -100,7 +99,7 @@ public class IngressController implements Reconciler<Ingress> {
 	OperatorMapper operatorMapper;
 
 	@Override
-	public UpdateControl<Ingress> reconcile(Ingress obj, Context context) {
+	public UpdateControl<Ingress> reconcile(Ingress obj, Context<Ingress> context) {
 		Log.tracef("reconcile. Ingress: %s", getQualifiedName(obj));
 		Optional<RoutingInfo> newInfo = getIstioRoutingInfo(obj);
 		if (newInfo.isEmpty()) {
@@ -120,16 +119,16 @@ public class IngressController implements Reconciler<Ingress> {
 		return UpdateControl.noUpdate();
 	}
 
-	@Override
-	public DeleteControl cleanup(Ingress obj, Context context) {
-		Log.tracef("onDelete. Ingress: %s, context: %s", getQualifiedName(obj), context);
-		Uni.createFrom()
-			.item(obj)
-			.emitOn(Infrastructure.getDefaultExecutor())
-			.subscribe()
-			.with(this::onDelete);
-		return DeleteControl.defaultDelete();
-	}
+//	@Override
+//	public DeleteControl cleanup(Ingress obj, Context context) {
+//		Log.tracef("onDelete. Ingress: %s, context: %s", getQualifiedName(obj), context);
+//		Uni.createFrom()
+//			.item(obj)
+//			.emitOn(Infrastructure.getDefaultExecutor())
+//			.subscribe()
+//			.with(this::onDelete);
+//		return DeleteControl.defaultDelete();
+//	}
 
 	private void createOrUpdateIstioResources(RoutingInfo info) {
 		Log.debugf("Create/update istio gateway for: %s", info);

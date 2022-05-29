@@ -18,9 +18,9 @@
 		<!-- sonar w/o tests -->
 		<sonar.tests/>
 		<!-- ⬇️⬇️⬇️Dependencies version properties⬇️⬇️⬇️ -->
-		<quarkus.platform.version>2.7.5.Final</quarkus.platform.version>
-		<quarkus-operator-sdk.version>3.0.7</quarkus-operator-sdk.version>
-		<operator-framework-core.version>2.1.4</operator-framework-core.version>
+		<quarkus.platform.version>2.9.2.Final</quarkus.platform.version>
+		<quarkus-operator-sdk.version>4.0.0.Beta2</quarkus-operator-sdk.version>
+		<operator-framework-core.version>3.0.1</operator-framework-core.version>
 		<kubernetes-client.version>5.12.2</kubernetes-client.version>
 		<mapstruct.version>1.5.0.RC1</mapstruct.version>
 		<truth.version>1.1.3</truth.version>
@@ -35,9 +35,15 @@
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
+			<!-- To fix quarkus version -->
 			<dependency>
 				<groupId>io.quarkus</groupId>
-				<artifactId>quarkus-universe-bom</artifactId>
+				<artifactId>quarkus-core</artifactId>
+				<version>${quarkus.platform.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.quarkus</groupId>
+				<artifactId>quarkus-bom</artifactId>
 				<version>${quarkus.platform.version}</version>
 				<type>pom</type>
 				<scope>import</scope>
@@ -197,8 +203,7 @@
 				<artifactId>maven-compiler-plugin</artifactId>
 				<configuration>
 					<configuration>
-						<source>17</source>
-						<target>17</target>
+						<release>17</release>
 					</configuration>
 					<annotationProcessorPaths>
 						<path>
@@ -247,6 +252,17 @@
 							<goal>generate-code</goal>
 							<goal>generate-code-tests</goal>
 						</goals>
+						<configuration>
+							<systemProperties>
+								<quarkus.container-image.push>true</quarkus.container-image.push>
+								<quarkus.container-image.build>true</quarkus.container-image.build>
+								<!-- <quarkus.package.type>native</quarkus.package.type> -->
+								<quarkus.native.container-build>true</quarkus.native.container-build>
+								<platform.quarkus.native.builder-image>quay.io/quarkus/ubi-quarkus-native-image:22.1-java17</platform.quarkus.native.builder-image>
+								<quarkus.native.builder-image>quay.io/quarkus/ubi-quarkus-native-image:22.1-java17</quarkus.native.builder-image>
+								<quarkus.native.native-image-xmx>16g</quarkus.native.native-image-xmx>
+							</systemProperties>
+						</configuration>
 					</execution>
 					<execution>
 						<id>build/push image</id>
@@ -260,7 +276,8 @@
 								<quarkus.container-image.build>true</quarkus.container-image.build>
 								<!-- <quarkus.package.type>native</quarkus.package.type> -->
 								<quarkus.native.container-build>true</quarkus.native.container-build>
-								<quarkus.native.builder-image>quay.io/quarkus/ubi-quarkus-native-image:21.3-java17</quarkus.native.builder-image>
+								<platform.quarkus.native.builder-image>quay.io/quarkus/ubi-quarkus-native-image:22.1-java17</platform.quarkus.native.builder-image>
+								<quarkus.native.builder-image>quay.io/quarkus/ubi-quarkus-native-image:22.1-java17</quarkus.native.builder-image>
 								<quarkus.native.native-image-xmx>16g</quarkus.native.native-image-xmx>
 							</systemProperties>
 						</configuration>
